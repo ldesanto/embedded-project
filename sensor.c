@@ -49,6 +49,10 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
     // if message is "child", we are coordinator
     else if (strcmp(message, "child") == 0) {
         type = 1;
+        // send "parent" to child
+        memcpy(nullnet_buf, "parent", sizeof("parent"));
+        nullnet_len = sizeof("parent");
+        NETSTACK_NETWORK.output(src);
     }
     // if message is new, send our type
     else if (strcmp(message, "new") == 0) {
@@ -62,6 +66,10 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             nullnet_len = sizeof("coordinator");
             NETSTACK_NETWORK.output(NULL);
         }
+    }
+    // if message is "parent", set src as parent
+    else if (strcmp(message, "parent") == 0) {
+        type = 0;
     }
 
 }
