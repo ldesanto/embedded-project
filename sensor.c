@@ -1,153 +1,133 @@
-// this is a cooja sensor node that will periodically send data to the coordinator node
-
 #include "contiki.h"
-#include "contiki-conf.h"
-#include "net/rime.h"
-#include "random.h"
+#include "net/netstack.h"
+#include "net/nullnet/nullnet.h"
+#include <string.h>
+#include <stdio.h> /* For printf() */
 #include "cc2420.h"
 #include "cc2420_const.h"
+/* Log configuration */
+#include "sys/log.h"
+#define LOG_MODULE "App"
+#define LOG_LEVEL LOG_LEVEL_INFO
 
-// first the node must find the coordinator node:
-// The nodes must organize themselves
-// into a tree with the border router node as root of the tree. To select a parent node, a new sensor node:
-// Checks if among the parent candidates, there is a coordinator node. If yes, the coordinator node become the parent.
-// If there are multiple coordinator nodes as potential parent, the sensor nodes uses the signal strength to decide.
-// If there are only sensor nodes as parent, the nodes uses the signal strength to decide.
+/* Configuration */
+#define SEND_INTERVAL (8 * CLOCK_SECOND)
+
+
+/*---------------------------------------------------------------------------*/
+PROCESS(nullnet_example_process, "NullNet broadcast example");
+AUTOSTART_PROCESSES(&nullnet_example_process);
 
 static int max_candidate = 10;
+static linkaddr_t edge_node = { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } };
+static linkaddr_t[max_candidate] coord_candidate;
+static int coord_candidate_index = 0;
+static linkaddr_t [max_candidate] sensor_candidate;
+static int sensor_candidate_index = 0;
+static linkaddr_t parent;
+static int[max_candidate] coord_candidate_rssi;
+static int[max_candidate] sensor_candidate_rssi;
+static int type = 0; // 0: sensor, 1: coordinator
 
-static rimeaddr_t candidate_parents_coord[max_candidate];
-int num_candidate_parents_coord = 0;
-static rimeaddr_t candidate_parents_sensor[max_candidate];
-int num_candidate_parents_sensor = 0;
-static int signal_strength_coord[max_candidate];
-static int signal_strength_sensor[max_candidate];
-static rimeaddr_t parent;
-
-static int type = 0; // 0 for sensor, 1 for coordinator
-
-static void broadcast_recv(struct broadcast_conn *c, const rimeaddr_t *from)
+/*---------------------------------------------------------------------------*/
+void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
 {
-    // add the sender to the list of candidate parents
-    riemaddr_t sender = from;
-    // check if the message is from a coordinator node
-    if (strcmp(packetbuf_dataptr(), "coordinator") == 0)
-    {
-        printf("received coordinator message\n");
-        if (num_candidate_parents_coord < max_candidate)
-        {
-        candidate_parents_coord[num_candidate_parents_coord] = sender;
-        num_candidate_parents_coord++;
-        signal_strength_coord[num_candidate_parents_coord] = cc2420_last_rssi;
-        }
+    static char[20] message;
+    memcpy(&message, data, len);
+    // if message is "coordinator", add src to coord_candidate
+    if (strcmp(message, "coordinator") == 0) {
+        coord_candidate[coord_candidate_index] = src;
+        coord_candidate_rssi[coord_candidate_index] = cc2420_last_rssi;
+        coord_candidate_index++;
+        
     }
-    // if the message is from a sensor node, check if the sender is a coordinator node
-    else if (strcmp(packetbuf_dataptr(), "sensor") == 0)
-    {
-        printf("received sensor message\n");
-        if (num_candidate_parents_sensor < max_candidate)
-        {
-        candidate_parents_sensor[num_candidate_parents_sensor] = sender;
-        num_candidate_parents_sensor++; 
-        signal_strength_sensor[num_candidate_parents_sensor] = cc2420_last_rssi;
-        }
+    // if message is "sensor", add src to sensor_candidate
+    else if (strcmp(message, "sensor") == 0) {
+        sensor_candidate[sensor_candidate_index] = src;
+        sensor_candidate_rssi[sensor_candidate_index] = cc2420_last_rssi;
+        sensor_candidate_index++;
     }
-    // if the broadcast is a "new" message, send a response
-    else if (strcmp(packetbuf_dataptr(), "new") == 0)
-    {
-        printf("received new message\n");
-        // send a response to the sender
-        packetbuf_copyfrom("sensor", 7);
-        broadcast_send(&broadcast);
-    }
-    // if the message is "parent", set the type to coordinator
-    else if (strcmp(packetbuf_dataptr(), "parent") == 0)
-    {
-        printf("received parent message\n");
+    // if message is "child", we are coordinator
+    else if (strcmp(message, "child") == 0) {
         type = 1;
     }
+    // if message is new, send our type
+    else if (strcmp(message, "new") == 0) {
+        if (type == 0) {
+            memcpy(nullnet_buf, "sensor", sizeof("sensor"));
+            nullnet_len = sizeof("sensor");
+            NETSTACK_NETWORK.output(NULL);
+        }
+        else {
+            memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
+            nullnet_len = sizeof("coordinator");
+            NETSTACK_NETWORK.output(NULL);
+        }
+    }
 
 }
-
-// have a list of candidate parents addresses (rimeaddr_t)
-static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
-static struct broadcast_conn broadcast;
-
-static void recv_uc(struct unicast_conn *c, const rimeaddr_t *from)
+/*---------------------------------------------------------------------------*/
+PROCESS_THREAD(nullnet_example_process, ev, data)
 {
-    
-}
+    static struct etimer periodic_timer;
+    static char[20] message = "new";
 
-static struct unicast_conn unicast;
-static const struct unicast_callbacks unicast_callbacks = {recv_uc};
-
-PROCESS(sensor_process, "Sensor process");
-AUTOSTART_PROCESSES(&sensor_process);
-
-PROCESS_THREAD(sensor_process, ev, data)
-{   
     PROCESS_BEGIN();
 
-    broadcast_open(&broadcast, 129, &broadcast_call);
-    unicast_open(&unicast, 146, &unicast_callbacks);
+    /* Initialize NullNet */
+    nullnet_buf = (uint8_t *)&message;
+    nullnet_len = sizeof(message);
+    nullnet_set_input_callback(input_callback);
 
-    // broadcast message "new" & sensor_id 
+    
+    memcpy(nullnet_buf, &message, sizeof(message));
+    nullnet_len = sizeof(message);
 
-    packetbuf_copyfrom("new", 4);
-    broadcast_send(&broadcast);
+    NETSTACK_NETWORK.output(NULL);
 
-    // wait for 2 seconds for responses
-    static struct etimer et;
-    etimer_set(&et, CLOCK_SECOND * 2);
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
+    // wait for 2 seconds
+    etimer_set(&periodic_timer, 2 * CLOCK_SECOND);
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
 
-    // check if there is only one candidate coordinator node, if yes set it as parent
-    if (num_candidate_parents_coord == 1)
-    {
-        parent = candidate_parents_coord[0];
+    // if there is only one coordinator candidate, set it as parent
+    if (coord_candidate_index == 1) {
+        parent = coord_candidate[0];
     }
-    // if there are multiple coordinator nodes, choose the one with the highest signal strength
-    else if (num_candidate_parents_coord > 1)
-    {
-        int max = signal_strength_coord[0];
+    // if there are multiple coordinator candidates, set the one with highest rssi as parent
+    else if (coord_candidate_index > 1) {
+        int max_rssi = -100;
         int max_index = 0;
-        for (int i = 1; i < num_candidate_parents_coord; i++)
-        {
-            if (signal_strength_coord[i] > max)
-            {
-                max = signal_strength_coord[i];
+        for (int i = 0; i < coord_candidate_index; i++) {
+            if (coord_candidate_rssi[i] > max_rssi) {
+                max_rssi = coord_candidate_rssi[i];
                 max_index = i;
             }
         }
-        parent = candidate_parents_coord[max_index];
+        parent = coord_candidate[max_index];
     }
-    // if there are no coordinator nodes, choose the sensor node with the highest signal strength
-    else if (num_candidate_parents_coord == 0)
-    {
-        int max = signal_strength_sensor[0];
+    // if there is not coordinator candidate but there is sensor candidate, set the one with highest rssi as parent
+    else if (sensor_candidate_index > 0) {
+        int max_rssi = -100;
         int max_index = 0;
-        for (int i = 1; i < num_candidate_parents_sensor; i++)
-        {
-            if (signal_strength_sensor[i] > max)
-            {
-                max = signal_strength_sensor[i];
+        for (int i = 0; i < sensor_candidate_index; i++) {
+            if (sensor_candidate_rssi[i] > max_rssi) {
+                max_rssi = sensor_candidate_rssi[i];
                 max_index = i;
             }
         }
-        parent = candidate_parents_sensor[max_index];
+        parent = sensor_candidate[max_index];
     }
-    // if both are empty, set the parent to the border router
-    else
-    {
-        parent.u8[0] = 0;
-        parent.u8[1] = 0;
+    // if there is no coordinator candidate, set the edge node as parent
+    else {
+        parent = edge_node;
         type = 1;
     }
 
-    // send a message to the parent node
+    // send child to parent
+    memcpy(nullnet_buf, "child", sizeof("child"));
+    nullnet_len = sizeof("child");
+    netstack_network.output(&parent);
 
-    packetbuf_copyfrom("parent", 6);
-    unicast_send(&unicast, &parent);
-    
-    PROCESS_END();
+  PROCESS_END();
 }
+
