@@ -9,7 +9,7 @@
 #include "sys/log.h"
 #define LOG_MODULE "App"
 #define LOG_LEVEL LOG_LEVEL_INFO
-
+#define MAX_CANDIDATE 10
 /* Configuration */
 #define SEND_INTERVAL (8 * CLOCK_SECOND)
 
@@ -18,32 +18,31 @@
 PROCESS(nullnet_example_process, "NullNet broadcast example");
 AUTOSTART_PROCESSES(&nullnet_example_process);
 
-static int max_candidate = 10;
 static linkaddr_t edge_node = { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } };
-static linkaddr_t[max_candidate] coord_candidate;
+static linkaddr_t coord_candidate[MAX_CANDIDATE];
 static int coord_candidate_index = 0;
-static linkaddr_t [max_candidate] sensor_candidate;
+static linkaddr_t sensor_candidate[MAX_CANDIDATE];
 static int sensor_candidate_index = 0;
 static linkaddr_t parent;
-static int[max_candidate] coord_candidate_rssi;
-static int[max_candidate] sensor_candidate_rssi;
+static int coord_candidate_rssi[MAX_CANDIDATE];
+static int sensor_candidate_rssi[MAX_CANDIDATE];
 static int type = 0; // 0: sensor, 1: coordinator
 
 /*---------------------------------------------------------------------------*/
 void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
 {
-    static char[20] message;
+    static char message[20];
     memcpy(&message, data, len);
     // if message is "coordinator", add src to coord_candidate
     if (strcmp(message, "coordinator") == 0) {
-        coord_candidate[coord_candidate_index] = src;
+        memcpy(&coord_candidate[coord_candidate_index], src, sizeof(linkaddr_t));
         coord_candidate_rssi[coord_candidate_index] = cc2420_last_rssi;
         coord_candidate_index++;
         
     }
     // if message is "sensor", add src to sensor_candidate
     else if (strcmp(message, "sensor") == 0) {
-        sensor_candidate[sensor_candidate_index] = src;
+        memcpy(&sensor_candidate[sensor_candidate_index], src, sizeof(linkaddr_t));
         sensor_candidate_rssi[sensor_candidate_index] = cc2420_last_rssi;
         sensor_candidate_index++;
     }
@@ -70,7 +69,7 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
 PROCESS_THREAD(nullnet_example_process, ev, data)
 {
     static struct etimer periodic_timer;
-    static char[20] message = "new";
+    static char message[20] = "new";
 
     PROCESS_BEGIN();
 
@@ -82,7 +81,7 @@ PROCESS_THREAD(nullnet_example_process, ev, data)
     
     memcpy(nullnet_buf, &message, sizeof(message));
     nullnet_len = sizeof(message);
-
+    LOG_INFO("Sending %s\n", (char *)nullnet_buf);
     NETSTACK_NETWORK.output(NULL);
 
     // wait for 2 seconds
@@ -126,7 +125,13 @@ PROCESS_THREAD(nullnet_example_process, ev, data)
     // send child to parent
     memcpy(nullnet_buf, "child", sizeof("child"));
     nullnet_len = sizeof("child");
-    netstack_network.output(&parent);
+    NETSTACK_NETWORK.output(&parent);
+    while (1){
+        // wait for 5 seconds
+        etimer_set(&periodic_timer, 5 * CLOCK_SECOND);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
+        LOG_INFO("type %d\n", type);
+    }
 
   PROCESS_END();
 }

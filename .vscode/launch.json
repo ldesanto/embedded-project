@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "//192.168.1.69/server/University/MA2/Q2/Embedded/Project/embedded-project",
-      "program": "//192.168.1.69/server/University/MA2/Q2/Embedded/Project/embedded-project/build/Debug/outDebug",
+      "cwd": "d:/Desktop/Code/embedded/embedded-project",
+      "program": "d:/Desktop/Code/embedded/embedded-project/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

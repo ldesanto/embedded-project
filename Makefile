@@ -1,5 +1,4 @@
-all: $(CONTIKI_PROJECT)
-CONTIKI_PROJECT = embedded
+all: sensor, border, coordinator
 
-CONTIKI = ../..
+CONTIKI = ..
 include $(CONTIKI)/Makefile.include
