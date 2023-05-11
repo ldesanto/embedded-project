@@ -13,13 +13,15 @@
 #define LOG_LEVEL LOG_LEVEL_INFO
 
 /* Configuration */
-#define WINDOW_SIZE 10 // window size in seconds
 #define MAX_CANDIDATE 10 // max number of candidates
 #define MAX_RETRIES 2 // max number of retries to find a parent
+#define GATHER_TIME 2 // time to gather candidates (in seconds)
 #define MAX_WAIT 5 // max wait time for a response from parent (in seconds)
-#define MAX_WAIT_COORDINATOR 5 // max wait time for a response from coordinator (in seconds)
 #define MAX_CHILDREN 10 // max number of children
 #define DATA_LENGTH 1 // length of data to send
+
+#define WINDOW_SIZE 1000 // window size in ticks
+
 #define EDGE_NODE { { 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } // edge node address
 
 /*---------------------------------------------------------------------------*/
@@ -35,28 +37,46 @@ static int coord_candidate_index = 0;
 static linkaddr_t sensor_candidate[MAX_CANDIDATE];
 static linkaddr_t children[MAX_CHILDREN];
 static int children_size = 0;
-
+static linkaddr_t current_child;
 static int sensor_candidate_index = 0;
 static linkaddr_t parent = EDGE_NODE;
 static int coord_candidate_rssi[MAX_CANDIDATE];
 static int sensor_candidate_rssi[MAX_CANDIDATE];
 static int type = -1; // 0: sensor, 1: coordinator // -1 undecided
+
+static clock_time_t window_start = 0;
+static int window_size = WINDOW_SIZE;
+static int window_allotted = 0;
+
 static const linkaddr_t edge_node = EDGE_NODE;
+
+static bool waiting_for_clock = false;
+static bool waiting_for_window_start = false;
+static bool waiting_for_window_allotted = false;
+
+static int counter = 0;
+
+static clock_time_t clock_offset = 0;
+
 /*---------------------------------------------------------------------------*/
 
+clock_time_t get_clock() {
+    return clock_time() + clock_offset;
+}
+
 void send_data(){
+
     // send back some random data
     for (int i = 0; i < DATA_LENGTH; i++) {
-        int random = rand() % 100;
-        memcpy(nullnet_buf, &random, sizeof(random));
-        nullnet_len = sizeof(random);
+        memcpy(nullnet_buf, &counter, sizeof(counter));
+        nullnet_len = sizeof(counter);
         NETSTACK_NETWORK.output(&parent);
     }
     // send "done" to parent
     memcpy(nullnet_buf, "done", sizeof("done"));
     nullnet_len = sizeof("done");
     NETSTACK_NETWORK.output(&parent);
-    
+    counter++;
 }
 
 void new_child(const linkaddr_t* child) {
@@ -83,6 +103,45 @@ void input_callback_sensor(const void *data, uint16_t len, const linkaddr_t *src
     }
 }
 
+void message_from_parent(const char* message, uint16_t len) {
+   // if the message is "clock" send back the clock
+    if (strcmp(message, "clock") == 0) {
+        // send back the clock
+        clock_time_t clock = get_clock();
+        memcpy(nullnet_buf, &clock, sizeof(clock));
+        nullnet_len = sizeof(clock);
+        NETSTACK_NETWORK.output(&parent);
+        waiting_for_clock = true;
+        return;
+    }
+    // if the message is "window"
+    else if (strcmp(message, "window") == 0) {
+        waiting_for_window_start = true;
+    }
+    else if (waiting_for_window_start) {
+        // set the window start
+        memcpy(&window_start, message, len);
+        waiting_for_window_start = false;
+        waiting_for_window_allotted = true;
+        return;
+    }
+    else if (waiting_for_window_allotted) {
+        // set the window allotted
+        memcpy(&window_allotted, message, len);
+        waiting_for_window_allotted = false;
+        // wake up the process
+        process_poll(&main_coordinator);
+        return;
+    }
+    else if (waiting_for_clock) {
+        // set the clock offset equals to the difference between the clock received and the current clock
+        clock_offset = clock_time() - *((clock_time_t*) message);
+        waiting_for_clock = false;
+
+        return;
+    }
+}
+
 void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
 {
     static char message[20];
@@ -90,6 +149,13 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
     memcpy(&source, src, sizeof(linkaddr_t));
     memcpy(&message, data, len);
     LOG_INFO("COORDINATOR | Received %s from %d.%d to %d.%d\n", message, src->u8[0], src->u8[1], dest->u8[0], dest->u8[1]);
+
+    // if message comes from parent, call message_from_parent()
+    if (linkaddr_cmp(&source, &parent)) {
+        message_from_parent(message, len);
+        return;
+    }
+
     // if message is new, send our type
     if (strcmp(message, "new") == 0) {
         // if there is space for new child, send "coordinator"
@@ -112,18 +178,19 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
         return;
     }
     // if message is "done", wake up the process
-    else if (strcmp(message, "done") == 0) {
+    else if (strcmp(message, "done") == 0 && linkaddr_cmp(&source, &current_child)) { // check if the message is from current child
         // wake up the process
         process_poll(&main_coordinator);
         return;
     }
-    else {
+    else if (linkaddr_cmp(&source, &current_child)){ // check if the message is from current child
         // forward the message to parent (edge node)
         LOG_INFO("COORDINATOR | Forwarding %s from %d.%d to %d.%d\n", message, src->u8[0], src->u8[1], dest->u8[0], dest->u8[1]);
         memcpy(nullnet_buf, message, sizeof(message));
         nullnet_len = sizeof(message);
         NETSTACK_NETWORK.output(&parent);
     }
+    
 }
 
 void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
@@ -258,7 +325,7 @@ PROCESS_THREAD(setup_process, ev, data)
     NETSTACK_NETWORK.output(NULL);
 
     // wait for 2 seconds
-    etimer_set(&periodic_timer,2 * CLOCK_SECOND);
+    etimer_set(&periodic_timer,GATHER_TIME * CLOCK_SECOND);
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
 
     // if there is only one coordinator candidate, set it as parent
@@ -327,7 +394,8 @@ PROCESS_THREAD(setup_process, ev, data)
 PROCESS_THREAD(main_coordinator, ev, data)
 {
     PROCESS_BEGIN();
-    static struct etimer periodic_timer;
+    static struct etimer window_timer;
+
     static char message[20];
 
     LOG_INFO("COORDINATOR | Parent: %d.%d\n", parent.u8[0], parent.u8[1]);
@@ -336,27 +404,77 @@ PROCESS_THREAD(main_coordinator, ev, data)
     nullnet_buf = (uint8_t *)&message;
     nullnet_len = sizeof(message);
     nullnet_set_input_callback(input_callback_coordinator);
+
+    // send "coordinator" to parent
+    memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
+    nullnet_len = sizeof("coordinator");
+    NETSTACK_NETWORK.output(&parent);
+
+    // pause the process 
+    PROCESS_PAUSE();
+    
+    // wait until the clock time is equal to the window start time
+    while (get_clock() != window_start) {
+        
+    }
+
     static int i;
 
     while (1){
         i=0;
-        // sleep for 1 second
-        etimer_set(&periodic_timer, CLOCK_SECOND);
-        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
-        
+
+        etimer_set(&window_timer, window_allotted);
         // for each child, send "poll" to it then wait for window_size / num_children seconds
-        while(i < children_size) {
-            etimer_set(&periodic_timer, (MAX_WAIT_COORDINATOR * CLOCK_SECOND));
-            
+        
+        // if we have no children, send "ping" to parent
+        if (children_size == 0) {
+            memcpy(nullnet_buf, "ping", sizeof("ping"));
+            nullnet_len = sizeof("ping");
+            NETSTACK_NETWORK.output(&parent);
+        }
+
+        while(i < children_size || etimer_expired(&window_timer)) {
+
+            // send "sensor" to parent
+            memcpy(nullnet_buf, "sensor", sizeof("sensor"));
+            nullnet_len = sizeof("sensor");
+            NETSTACK_NETWORK.output(&parent);
+
+            // send the child address to the parent
+            memcpy(nullnet_buf, &children[i], sizeof(linkaddr_t));
+            nullnet_len = sizeof(linkaddr_t);
+            NETSTACK_NETWORK.output(&parent);
+
+            // send the poll to the child
             LOG_INFO("Sending poll message %d, children size %d\n", i, children_size);
             memcpy(nullnet_buf, "poll", sizeof("poll"));
             nullnet_len = sizeof("poll");
-            NETSTACK_NETWORK.output(&children[i]);
+            current_child = children[i];
+            NETSTACK_NETWORK.output(&current_child);
             i++;
-            // wait until the timer expires or we get polled
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer) || ev == PROCESS_EVENT_POLL);
 
+            // wait until the window timer expires or we receive a "done" from the child
+            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer) || ev == PROCESS_EVENT_POLL);
+            if (etimer_expired(&window_timer)) {
+                LOG_INFO("Sensor %d timeout\n", i);
+                
+                // remove the child from the children list
+                for (int j = 0; j < children_size; j++) {
+                    if (linkaddr_cmp(&children[j], &current_child)) {
+                        for (int k = j; k < children_size - 1; k++) {
+                            memcpy(&children[k], &children[k+1], sizeof(linkaddr_t));
+                        }
+                        children_size--;
+                        break;
+                    }
+                }   
+            }
         }
+
+         // sleep for window_size - window_alloted seconds
+        etimer_set(&window_timer, window_size - window_allotted);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
+
     }
     
     PROCESS_END();
