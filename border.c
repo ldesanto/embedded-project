@@ -217,8 +217,6 @@ PROCESS_THREAD(synchronizaton, ev, data)
 
     LOG_INFO("Sending new clocktime\n");
     //send synchronization message to all coordinators
-    memcpy(nullnet_buf, "clock_set", sizeof("clock_set"));
-    NETSTACK_NETWORK.output(NULL);
     memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
     NETSTACK_NETWORK.output(NULL);
 
@@ -282,6 +280,8 @@ PROCESS_THREAD(timeslotting, ev, data){
     }
     //send timeslot_start to all coordinators
     for (int i = 0; i < number_of_coordinators; i++){
+        memcpy(nullnet_buf, "window", sizeof(timeslot_start[i]));
+        NETSTACK_NETWORK.output(&coordinator_list[i]);
         memcpy(&timeslot_start[i], nullnet_buf, sizeof(timeslot_start[i]));
         LOG_INFO("Sending timeslot_start to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
         NETSTACK_NETWORK.output(&coordinator_list[i]);
