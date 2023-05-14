@@ -303,6 +303,8 @@ void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src,
     memcpy(&source, src, sizeof(linkaddr_t));
     memcpy(message, data, len);
     LOG_INFO("Received message from %d.%d: %s\n", source.u8[0], source.u8[1], message);
+    process_poll(&setup_process);
+
     if (strcmp(message, "coordinator") == 0){
         //a new coordinator arrived, add it to the list of pending coordinators
         if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
@@ -313,7 +315,6 @@ void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src,
         else {
             LOG_INFO("Maximum number of coordinators reached\n");
         }
-        return;
     }
     //if the message is stop, stop the process
     if (strcmp(message, "stop") == 0){
@@ -340,7 +341,7 @@ PROCESS_THREAD(setup_process, ev, data){
     while(!stop){
         LOG_INFO("3\n");
         //wait for the first coordinator to arrive
-        PROCESS_WAIT_EVENT_UNTIL(number_of_pending > 0);
+        PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_POLL);
         LOG_INFO("4\n");
 
         //start synchronization

@@ -367,7 +367,7 @@ PROCESS_THREAD(setup_process, ev, data)
         type = 1;
         memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
         nullnet_len = sizeof("coordinator");
-        NETSTACK_NETWORK.output(&parent); 
+        NETSTACK_NETWORK.output(NULL); 
     }
 
     if (type == 0) {
@@ -405,11 +405,6 @@ PROCESS_THREAD(main_coordinator, ev, data)
     nullnet_buf = (uint8_t *)&message;
     nullnet_len = sizeof(message);
     nullnet_set_input_callback(input_callback_coordinator);
-
-    // send "coordinator" to parent
-    memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
-    nullnet_len = sizeof("coordinator");
-    NETSTACK_NETWORK.output(NULL);
 
     if (window_start != 0){
         // wait until the clock time is equal to the window start time
