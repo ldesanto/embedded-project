@@ -105,7 +105,7 @@ void input_callback_sensor(const void *data, uint16_t len, const linkaddr_t *src
 
 void message_from_parent(const char* message, uint16_t len) {
    // if the message is "clock" send back the clock
-    if (strcmp(message, "clock") == 0) {
+    if (strcmp(message, "clock_request") == 0) {
         // send back the clock
         clock_time_t clock = get_clock();
         memcpy(nullnet_buf, &clock, sizeof(clock));
