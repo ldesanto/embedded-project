@@ -136,6 +136,7 @@ void message_from_parent(const char* message, uint16_t len) {
     else if (waiting_for_clock) {
         // set the clock offset equals to the difference between the clock received and the current clock
         clock_offset = clock_time() - *((clock_time_t*) message);
+        LOG_INFO("New clock offset: %d\n", clock_offset);
         waiting_for_clock = false;
 
         return;
