@@ -22,7 +22,7 @@
 
 #define WINDOW_SIZE 1000 // window size in ticks
 
-#define EDGE_NODE { { 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } // edge node address
+#define EDGE_NODE {{1,0}} // edge node address
 
 /*---------------------------------------------------------------------------*/
 PROCESS(setup_process, "setup_process");
@@ -39,14 +39,14 @@ static linkaddr_t children[MAX_CHILDREN];
 static int children_size = 0;
 static linkaddr_t current_child;
 static int sensor_candidate_index = 0;
-static linkaddr_t parent = EDGE_NODE;
+static linkaddr_t parent;
 static int coord_candidate_rssi[MAX_CANDIDATE];
 static int sensor_candidate_rssi[MAX_CANDIDATE];
 static int type = -1; // 0: sensor, 1: coordinator // -1 undecided
 
 static clock_time_t window_start = 0;
 static int window_size = WINDOW_SIZE;
-static int window_allotted = 0;
+static int window_allotted = 100;
 
 static const linkaddr_t edge_node = EDGE_NODE;
 
@@ -136,9 +136,8 @@ void message_from_parent(const char* message, uint16_t len) {
     else if (waiting_for_clock) {
         // set the clock offset equals to the difference between the clock received and the current clock
         clock_offset = clock_time() - *((clock_time_t*) message);
-        LOG_INFO("New clock offset: %d\n", clock_offset);
+        LOG_INFO("New clock offset: %d\n", (int) clock_offset);
         waiting_for_clock = false;
-
         return;
     }
 }
@@ -363,6 +362,7 @@ PROCESS_THREAD(setup_process, ev, data)
     }
     // if there is no coordinator candidate, set the edge node as parent
     else {
+        // set the parent address to 0100.0000.0000.0000
         memcpy(&parent, &edge_node, sizeof(linkaddr_t));
         type = 1;
         memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
@@ -409,24 +409,21 @@ PROCESS_THREAD(main_coordinator, ev, data)
     // send "coordinator" to parent
     memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
     nullnet_len = sizeof("coordinator");
-    NETSTACK_NETWORK.output(&parent);
+    NETSTACK_NETWORK.output(NULL);
 
-    // pause the process 
-    PROCESS_PAUSE();
-    
-    // wait until the clock time is equal to the window start time
-    while (get_clock() != window_start) {
-        
+    if (window_start != 0){
+        // wait until the clock time is equal to the window start time
+        while (get_clock() != window_start) {
+            
+        }
     }
-
+    
     static int i;
 
     while (1){
         i=0;
 
         etimer_set(&window_timer, window_allotted);
-        // for each child, send "poll" to it then wait for window_size / num_children seconds
-        
         // if we have no children, send "ping" to parent
         if (children_size == 0) {
             memcpy(nullnet_buf, "ping", sizeof("ping"));
@@ -477,7 +474,7 @@ PROCESS_THREAD(main_coordinator, ev, data)
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
 
     }
-    
+    LOG_INFO("Exiting main_coordinator\n");
     PROCESS_END();
 }
 

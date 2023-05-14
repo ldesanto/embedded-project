@@ -302,7 +302,7 @@ void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src,
     static linkaddr_t source;
     memcpy(&source, src, sizeof(linkaddr_t));
     memcpy(message, data, len);
-
+    LOG_INFO("Received message from %d.%d: %s\n", source.u8[0], source.u8[1], message);
     if (strcmp(message, "coordinator") == 0){
         //a new coordinator arrived, add it to the list of pending coordinators
         if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
@@ -326,17 +326,23 @@ void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src,
 PROCESS_THREAD(setup_process, ev, data){
     PROCESS_BEGIN();
     LOG_INFO("Send message process started\n");
+
     static struct etimer timer;
     static char message[20];
     static int inc = 0;
 
     nullnet_buf = (uint8_t *)&message;
     nullnet_len = sizeof(message);
-    nullnet_set_input_callback(input_callback_setup);
 
+    nullnet_set_input_callback(input_callback_setup);
+    etimer_set(&timer, CLOCK_SECOND * 5);
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
     while(!stop){
+        LOG_INFO("3\n");
         //wait for the first coordinator to arrive
         PROCESS_WAIT_EVENT_UNTIL(number_of_pending > 0);
+        LOG_INFO("4\n");
+
         //start synchronization
         process_start(&synchronizaton, NULL);
         //wait for synchronization to finish
@@ -372,7 +378,9 @@ PROCESS_THREAD(setup_process, ev, data){
         type = -1;
         waiting_for_sync = false;
         waiting_for_timeslot = false;
+        LOG_INFO("new loop");
 
     }
+    LOG_INFO("Stopping the process");
     PROCESS_END();
 }
