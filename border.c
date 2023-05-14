@@ -1,417 +1,378 @@
-
 #include "contiki.h"
-#include "contiki-lib.h"
-#include "contiki-net.h"
-#include "net/ip/uip.h"
-#include "net/ipv6/uip-ds6.h"
-#include "net/rpl/rpl.h"
-#include "net/rpl/rpl-private.h"
-#if RPL_WITH_NON_STORING
-#include "net/rpl/rpl-ns.h"
-#endif /* RPL_WITH_NON_STORING */
-#include "net/netstack.h"
-#include "dev/button-sensor.h"
-#include "dev/slip.h"
-
-#include <stdio.h>
 #include <stdlib.h>
+#include "net/netstack.h"
+#include "net/nullnet/nullnet.h"
 #include <string.h>
-#include <ctype.h>
+#include <stdio.h>
+#include "cc2420.h"
+#include "cc2420_const.h"
+#include "sys/log.h"
 
-#define DEBUG DEBUG_NONE
-#include "net/ip/uip-debug.h"
+#define LOG_MODULE "App"
+#define LOG_LEVEL LOG_LEVEL_INFO
 
-static uip_ipaddr_t prefix;
-static uint8_t prefix_set;
-
-PROCESS(border_router_process, "Border router process");
-
-#if WEBSERVER==0
-/* No webserver */
-AUTOSTART_PROCESSES(&border_router_process);
-#elif WEBSERVER>1
-/* Use an external webserver application */
-#include "webserver-nogui.h"
-AUTOSTART_PROCESSES(&border_router_process,&webserver_nogui_process);
-#else
-/* Use simple webserver with only one page for minimum footprint.
- * Multiple connections can result in interleaved tcp segments since
- * a single static buffer is used for all segments.
- */
-#include "httpd-simple.h"
-/* The internal webserver can provide additional information if
- * enough program flash is available.
- */
-#define WEBSERVER_CONF_LOADTIME 0
-#define WEBSERVER_CONF_FILESTATS 0
-#define WEBSERVER_CONF_NEIGHBOR_STATUS 0
-/* Adding links requires a larger RAM buffer. To avoid static allocation
- * the stack can be used for formatting; however tcp retransmissions
- * and multiple connections can result in garbled segments.
- * TODO:use PSOCk_GENERATOR_SEND and tcp state storage to fix this.
- */
-#define WEBSERVER_CONF_ROUTE_LINKS 0
-#if WEBSERVER_CONF_ROUTE_LINKS
-#define BUF_USES_STACK 1
-#endif
-
-PROCESS(webserver_nogui_process, "Web server");
-PROCESS_THREAD(webserver_nogui_process, ev, data)
-{
-  PROCESS_BEGIN();
-
-  httpd_init();
-
-  while(1) {
-    PROCESS_WAIT_EVENT_UNTIL(ev == tcpip_event);
-    httpd_appcall(data);
-  }
-
-  PROCESS_END();
-}
-AUTOSTART_PROCESSES(&border_router_process,&webserver_nogui_process);
-
-static const char *TOP = "<html><head><title>ContikiRPL</title></head><body>\n";
-static const char *BOTTOM = "</body></html>\n";
-#if BUF_USES_STACK
-static char *bufptr, *bufend;
-#define ADD(...) do {                                                   \
-    bufptr += snprintf(bufptr, bufend - bufptr, __VA_ARGS__);      \
-  } while(0)
-#else
-static char buf[256];
-static int blen;
-#define ADD(...) do {                                                   \
-    blen += snprintf(&buf[blen], sizeof(buf) - blen, __VA_ARGS__);      \
-  } while(0)
-#endif
+/* Configuration */
+#define WINDOW_SIZE 1 // window size in seconds
+#define MAX_COORDINATOR 10 // maximum number of coordinators
+#define MAX_SENSORS 50 // maximum number of sensors
+#define WAIT_SYNC 2 // time to wait for synchronization
+#define EDGE_NODE { { 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } // edge node address
 
 /*---------------------------------------------------------------------------*/
-static void
-ipaddr_add(const uip_ipaddr_t *addr)
-{
-  uint16_t a;
-  int i, f;
-  for(i = 0, f = 0; i < sizeof(uip_ipaddr_t); i += 2) {
-    a = (addr->u8[i] << 8) + addr->u8[i + 1];
-    if(a == 0 && f >= 0) {
-      if(f++ == 0) ADD("::");
-    } else {
-      if(f > 0) {
-        f = -1;
-      } else if(i > 0) {
-        ADD(":");
-      }
-      ADD("%x", a);
+
+PROCESS(setup_process, "Setup process");
+PROCESS(collection_process, "Collection process");
+PROCESS(synchronizaton, "synchronizaton");
+PROCESS(timeslotting, "timeslotting");
+
+AUTOSTART_PROCESSES(&setup_process);
+
+static bool address_received = false; // flag to indicate if the address was received
+static linkaddr_t last_sensor; // address of the last sensor from which a message was received
+static linkaddr_t sensors[MAX_SENSORS]; // list of sensors addresses
+static int number_of_sensors = 0; // number of sensors
+static int count_of_sensors[MAX_SENSORS]; // list of counts of the sensors
+static int last_count = 0; // count of the last sensor from which a message was received
+static linkaddr_t coordinator_list[MAX_COORDINATOR]; // list of coordinators addresses
+static linkaddr_t pending_list[MAX_COORDINATOR]; // list of pending coordinators addresses
+static int number_of_coordinators = 0; // number of coordinators
+static int number_of_pending = 0; // number of pending coordinators
+static clock_time_t average_clock = 0; // average clock time of the coordinators
+static bool waiting_for_sync = false; // flag to indicate if the node is waiting for synchronization
+static int clock_received = 0; // number of clock times received
+static clock_time_t coordinator_clock[MAX_COORDINATOR]; // clock times of the coordinators
+static clock_time_t offset = 0;
+static unsigned long timeslots[MAX_COORDINATOR]; // timeslots of the coordinators
+static unsigned long timeslot_start[MAX_COORDINATOR] ; // start time of the timeslot
+static int receiving_from = -1; // index of the coordinator from which the node is receiving
+static int number_of_messages = 0; // number of messages received per window
+static bool waiting_for_timeslot = false; // flag to indicate if the node is waiting for a timeslot
+static int type = -1; // type of messsages active 1, inactive 0
+static bool stop = false; // flag to indicate if the node should exit
+/*---------------------------------------------------------------------------*/
+void assign_last_counts() {
+    //if a sensor is not in the list, add it
+    for (int i = 0; i <= number_of_sensors; i++) {
+        if (linkaddr_cmp(&sensors[i], &last_sensor)) {
+            count_of_sensors[i] = last_count;
+            return;
+        }
+        if (i == number_of_sensors - 1) {
+            memcpy(&sensors[number_of_sensors], &last_sensor, sizeof(linkaddr_t));
+            count_of_sensors[number_of_sensors] = last_count;
+            number_of_sensors++;
+            return;
+        }
+        if (number_of_sensors == 0) {
+            memcpy(&sensors[number_of_sensors], &last_sensor, sizeof(linkaddr_t));
+            count_of_sensors[number_of_sensors] = last_count;
+            number_of_sensors++;
+            return;
+        }
     }
-  }
 }
-/*---------------------------------------------------------------------------*/
-static
-PT_THREAD(generate_routes(struct httpd_state *s))
+
+void input_callback_collect(const void *data, uint16_t len,
+  const linkaddr_t *src, const linkaddr_t *dest)
 {
-  static uip_ds6_route_t *r;
-#if RPL_WITH_NON_STORING
-  static rpl_ns_node_t *link;
-#endif /* RPL_WITH_NON_STORING */
-  static uip_ds6_nbr_t *nbr;
-#if BUF_USES_STACK
-  char buf[256];
-#endif
-#if WEBSERVER_CONF_LOADTIME
-  static clock_time_t numticks;
-  numticks = clock_time();
-#endif
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
 
-  PSOCK_BEGIN(&s->sout);
-
-  SEND_STRING(&s->sout, TOP);
-#if BUF_USES_STACK
-  bufptr = buf;bufend=bufptr+sizeof(buf);
-#else
-  blen = 0;
-#endif
-  ADD("Neighbors<pre>");
-
-  for(nbr = nbr_table_head(ds6_neighbors);
-      nbr != NULL;
-      nbr = nbr_table_next(ds6_neighbors, nbr)) {
-
-#if WEBSERVER_CONF_NEIGHBOR_STATUS
-#if BUF_USES_STACK
-{char* j=bufptr+25;
-      ipaddr_add(&nbr->ipaddr);
-      while (bufptr < j) ADD(" ");
-      switch (nbr->state) {
-      case NBR_INCOMPLETE: ADD(" INCOMPLETE");break;
-      case NBR_REACHABLE: ADD(" REACHABLE");break;
-      case NBR_STALE: ADD(" STALE");break;
-      case NBR_DELAY: ADD(" DELAY");break;
-      case NBR_PROBE: ADD(" NBR_PROBE");break;
-      }
-}
-#else
-{uint8_t j=blen+25;
-      ipaddr_add(&nbr->ipaddr);
-      while (blen < j) ADD(" ");
-      switch (nbr->state) {
-      case NBR_INCOMPLETE: ADD(" INCOMPLETE");break;
-      case NBR_REACHABLE: ADD(" REACHABLE");break;
-      case NBR_STALE: ADD(" STALE");break;
-      case NBR_DELAY: ADD(" DELAY");break;
-      case NBR_PROBE: ADD(" NBR_PROBE");break;
-      }
-}
-#endif
-#else
-      ipaddr_add(&nbr->ipaddr);
-#endif
-
-      ADD("\n");
-#if BUF_USES_STACK
-      if(bufptr > bufend - 45) {
-        SEND_STRING(&s->sout, buf);
-        bufptr = buf; bufend = bufptr + sizeof(buf);
-      }
-#else
-      if(blen > sizeof(buf) - 45) {
-        SEND_STRING(&s->sout, buf);
-        blen = 0;
-      }
-#endif
-  }
-  ADD("</pre>Routes<pre>\n");
-  SEND_STRING(&s->sout, buf);
-#if BUF_USES_STACK
-  bufptr = buf; bufend = bufptr + sizeof(buf);
-#else
-  blen = 0;
-#endif
-
-  for(r = uip_ds6_route_head(); r != NULL; r = uip_ds6_route_next(r)) {
-
-#if BUF_USES_STACK
-#if WEBSERVER_CONF_ROUTE_LINKS
-    ADD("<a href=http://[");
-    ipaddr_add(&r->ipaddr);
-    ADD("]/status.shtml>");
-    ipaddr_add(&r->ipaddr);
-    ADD("</a>");
-#else
-    ipaddr_add(&r->ipaddr);
-#endif
-#else
-#if WEBSERVER_CONF_ROUTE_LINKS
-    ADD("<a href=http://[");
-    ipaddr_add(&r->ipaddr);
-    ADD("]/status.shtml>");
-    SEND_STRING(&s->sout, buf); //TODO: why tunslip6 needs an output here, wpcapslip does not
-    blen = 0;
-    ipaddr_add(&r->ipaddr);
-    ADD("</a>");
-#else
-    ipaddr_add(&r->ipaddr);
-#endif
-#endif
-    ADD("/%u (via ", r->length);
-    ipaddr_add(uip_ds6_route_nexthop(r));
-    if(1 || (r->state.lifetime < 600)) {
-      ADD(") %lus\n", (unsigned long)r->state.lifetime);
-    } else {
-      ADD(")\n");
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
+            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+        }
+        else {
+            LOG_INFO("Maximum number of coordinators reached\n");
+        }
+        return;
     }
-    SEND_STRING(&s->sout, buf);
-#if BUF_USES_STACK
-    bufptr = buf; bufend = bufptr + sizeof(buf);
-#else
-    blen = 0;
-#endif
-  }
-  ADD("</pre>");
-
-#if RPL_WITH_NON_STORING
-  ADD("Links<pre>\n");
-  SEND_STRING(&s->sout, buf);
-#if BUF_USES_STACK
-  bufptr = buf; bufend = bufptr + sizeof(buf);
-#else
-  blen = 0;
-#endif
-  for(link = rpl_ns_node_head(); link != NULL; link = rpl_ns_node_next(link)) {
-    if(link->parent != NULL) {
-      uip_ipaddr_t child_ipaddr;
-      uip_ipaddr_t parent_ipaddr;
-
-      rpl_ns_get_node_global_addr(&child_ipaddr, link);
-      rpl_ns_get_node_global_addr(&parent_ipaddr, link->parent);
-
-#if BUF_USES_STACK
-#if WEBSERVER_CONF_ROUTE_LINKS
-      ADD("<a href=http://[");
-      ipaddr_add(&child_ipaddr);
-      ADD("]/status.shtml>");
-      ipaddr_add(&child_ipaddr);
-      ADD("</a>");
-#else
-      ipaddr_add(&child_ipaddr);
-#endif
-#else
-#if WEBSERVER_CONF_ROUTE_LINKS
-      ADD("<a href=http://[");
-      ipaddr_add(&child_ipaddr);
-      ADD("]/status.shtml>");
-      SEND_STRING(&s->sout, buf); //TODO: why tunslip6 needs an output here, wpcapslip does not
-      blen = 0;
-      ipaddr_add(&child_ipaddr);
-      ADD("</a>");
-#else
-      ipaddr_add(&child_ipaddr);
-#endif
-#endif
-
-      ADD(" (parent: ");
-      ipaddr_add(&parent_ipaddr);
-      if(1 || (link->lifetime < 600)) {
-        ADD(") %us\n", (unsigned int)link->lifetime); // iotlab printf does not have %lu
-        //ADD(") %lus\n", (unsigned long)r->state.lifetime);
-      } else {
-        ADD(")\n");
-      }
-      SEND_STRING(&s->sout, buf);
-#if BUF_USES_STACK
-      bufptr = buf; bufend = bufptr + sizeof(buf);
-#else
-      blen = 0;
-#endif
+    else if (strcmp(message, "ping") == 0) {
+        LOG_INFO("Received ping message from %d.%d\n", source.u8[0], source.u8[1]);
+        number_of_messages ++;
+        return;
     }
-  }
-  ADD("</pre>");
-#endif /* RPL_WITH_NON_STORING */
-
-#if WEBSERVER_CONF_FILESTATS
-  static uint16_t numtimes;
-  ADD("<br><i>This page sent %u times</i>",++numtimes);
-#endif
-
-#if WEBSERVER_CONF_LOADTIME
-  numticks = clock_time() - numticks + 1;
-  ADD(" <i>(%u.%02u sec)</i>",numticks/CLOCK_SECOND,(100*(numticks%CLOCK_SECOND))/CLOCK_SECOND));
-#endif
-
-  SEND_STRING(&s->sout, buf);
-  SEND_STRING(&s->sout, BOTTOM);
-
-  PSOCK_END(&s->sout);
-}
-/*---------------------------------------------------------------------------*/
-httpd_simple_script_t
-httpd_simple_get_script(const char *name)
-{
-
-  return generate_routes;
-}
-
-#endif /* WEBSERVER */
-
-/*---------------------------------------------------------------------------*/
-static void
-print_local_addresses(void)
-{
-  int i;
-  uint8_t state;
-
-  PRINTA("Server IPv6 addresses:\n");
-  for(i = 0; i < UIP_DS6_ADDR_NB; i++) {
-    state = uip_ds6_if.addr_list[i].state;
-    if(uip_ds6_if.addr_list[i].isused &&
-       (state == ADDR_TENTATIVE || state == ADDR_PREFERRED)) {
-      PRINTA(" ");
-      uip_debug_ipaddr_print(&uip_ds6_if.addr_list[i].ipaddr);
-      PRINTA("\n");
+    else if (strcmp(message, "sensor") == 0){
+        // a message from a new sensor is about to be forwarded
+        LOG_INFO("Received sensor message from %d.%d\n", source.u8[0], source.u8[1]);
+        address_received = false;
+        number_of_messages ++;
+        return;
     }
-  }
-}
-/*---------------------------------------------------------------------------*/
-void
-request_prefix(void)
-{
-  /* mess up uip_buf with a dirty request... */
-  uip_buf[0] = '?';
-  uip_buf[1] = 'P';
-  uip_len = 2;
-  slip_send();
-  uip_clear_buf();
-}
-/*---------------------------------------------------------------------------*/
-void
-set_prefix_64(uip_ipaddr_t *prefix_64)
-{
-  rpl_dag_t *dag;
-  uip_ipaddr_t ipaddr;
-  memcpy(&prefix, prefix_64, 16);
-  memcpy(&ipaddr, prefix_64, 16);
-  prefix_set = 1;
-  uip_ds6_set_addr_iid(&ipaddr, &uip_lladdr);
-  uip_ds6_addr_add(&ipaddr, 0, ADDR_AUTOCONF);
-
-  dag = rpl_set_root(RPL_DEFAULT_INSTANCE, &ipaddr);
-  if(dag != NULL) {
-    rpl_set_prefix(dag, &prefix, 64);
-    PRINTF("created a new RPL dag\n");
-  }
-}
-/*---------------------------------------------------------------------------*/
-PROCESS_THREAD(border_router_process, ev, data)
-{
-  static struct etimer et;
-
-  PROCESS_BEGIN();
-
-/* While waiting for the prefix to be sent through the SLIP connection, the future
- * border router can join an existing DAG as a parent or child, or acquire a default
- * router that will later take precedence over the SLIP fallback interface.
- * Prevent that by turning the radio off until we are initialized as a DAG root.
- */
-  prefix_set = 0;
-  NETSTACK_MAC.off(0);
-
-  PROCESS_PAUSE();
-
-  SENSORS_ACTIVATE(button_sensor);
-
-  PRINTF("RPL-Border router started\n");
-#if 0
-   /* The border router runs with a 100% duty cycle in order to ensure high
-     packet reception rates.
-     Note if the MAC RDC is not turned off now, aggressive power management of the
-     cpu will interfere with establishing the SLIP connection */
-  NETSTACK_MAC.off(1);
-#endif
-
-  /* Request prefix until it has been received */
-  while(!prefix_set) {
-    etimer_set(&et, CLOCK_SECOND);
-    request_prefix();
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&et));
-  }
-
-  /* Now turn the radio on, but disable radio duty cycling.
-   * Since we are the DAG root, reception delays would constrain mesh throughbut.
-   */
-  NETSTACK_MAC.off(1);
-
-#if DEBUG || 1
-  print_local_addresses();
-#endif
-
-  while(1) {
-    PROCESS_YIELD();
-    if (ev == sensors_event && data == &button_sensor) {
-      PRINTF("Initiating global repair\n");
-      rpl_repair_root(RPL_DEFAULT_INSTANCE);
+    else if (address_received){
+        //if the address is already received, then we're listenning for the count
+        LOG_INFO("Received count %s from %d.%d\n", message, last_sensor.u8[0], last_sensor.u8[1]);
+        last_count = atoi(message);
+        return;
     }
-  }
+    else {
+        //if the address is not received, then we're listenning for the address
+        LOG_INFO("Received address %s from %d.%d\n", message, source.u8[0], source.u8[1]);
+        memcpy(&last_sensor, src, sizeof(linkaddr_t));
+        address_received = true;
+        return;
+    }
+}
+PROCESS_THREAD(collection_process, ev, data){
+    static struct etimer timer;
+    static char message[20];
+    PROCESS_BEGIN()
+    LOG_INFO("Collection process started\n");
+    nullnet_buf = (uint8_t *)&message;
+    nullnet_len = sizeof(message);
+    nullnet_set_input_callback(input_callback_collect);
 
-  PROCESS_END();
+    while (1){
+        etimer_set(&timer, CLOCK_SECOND * WINDOW_SIZE);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+        LOG_INFO("Number of messages received: %d\n", number_of_messages);
+        number_of_messages = 0;
+        break;
+    }
+    PROCESS_END();
 }
 /*---------------------------------------------------------------------------*/
+void input_callback_synchronization(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest){
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
+
+    //wait for number of coordinators clock times to synchronize
+    if (waiting_for_sync){
+        LOG_INFO("Received clock from %d.%d\n", source.u8[0], source.u8[1]);
+        //if time message received, mark the coordinator as active
+        coordinator_clock[clock_received] = atoi(message);
+        clock_received++;
+
+        if (clock_received == number_of_coordinators){
+            waiting_for_sync = false;
+        }
+        return;
+    }
+
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
+            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+        }
+        else {
+            LOG_INFO("Maximum number of coordinators reached\n");
+        }
+        return;
+    }
+}
+
+//create a process that send "clock_request" to all coordinatorrs, as well as the pending ones
+PROCESS_THREAD(synchronizaton, ev, data)
+{
+    PROCESS_BEGIN();
+    static struct etimer timer;
+    static char message[20];
+    LOG_INFO("Synchronization process started\n");
+
+    nullnet_buf = (uint8_t *)&message;
+    nullnet_len = sizeof(message);
+    nullnet_set_input_callback(input_callback_synchronization);
+
+    //free coordinator clock list
+    memset(coordinator_clock, 0, sizeof(coordinator_clock));
+
+    //send clock_request to all coordinators
+    for (int i = 0; i < number_of_coordinators; i++){
+        memcpy(nullnet_buf, "clock_request", sizeof("clock_request"));
+        LOG_INFO("Sending clock_request to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+        NETSTACK_NETWORK.output(&coordinator_list[i]);
+    }
+    //send clock_request to all pending coordinators
+    for (int i = 0; i < number_of_pending; i++){
+        memcpy(nullnet_buf, "clock_request", sizeof("clock_request"));
+        LOG_INFO("Sending clock_request to %d.%d\n", pending_list[i].u8[0], pending_list[i].u8[1]);
+        NETSTACK_NETWORK.output(&pending_list[i]);
+        //remove coordinator from the pending list and add it to the coordinator list
+        memcpy(&coordinator_list[number_of_coordinators], &pending_list[i], sizeof(linkaddr_t));
+        number_of_coordinators++;
+    }
+    waiting_for_sync = true;
+    //wait for number of coordinators clock times to synchronize
+    etimer_set(&timer, WAIT_SYNC * CLOCK_SECOND);
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+
+    //calculate average clock time
+    for (int i = 0; i < number_of_coordinators; i++){
+        average_clock += coordinator_clock[i];
+    }
+    average_clock += clock_time();
+    average_clock /= (number_of_coordinators + 1);
+
+    //calculate the offset between own clock and average clock
+    offset = average_clock - clock_time();
+
+    LOG_INFO("Sending new clocktime\n");
+    //send synchronization message to all coordinators
+    memcpy(nullnet_buf, "clock_set", sizeof("clock_set"));
+    NETSTACK_NETWORK.output(NULL);
+    memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
+    NETSTACK_NETWORK.output(NULL);
+
+
+    //free coordinator clock list
+    memset(coordinator_clock, 0, sizeof(coordinator_clock));
+    //free pending list
+    memset(pending_list, 0, sizeof(pending_list));
+
+    PROCESS_END();
+}
+/*---------------------------------------------------------------------------*/
+void input_callback_timeslot(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest){
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
+
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if (number_of_coordinators < MAX_COORDINATOR){
+            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+        }
+        else {
+            LOG_INFO("Maximum number of coordinators reached\n");
+        }
+        return;
+    }
+}
+
+PROCESS_THREAD(timeslotting, ev, data){
+    PROCESS_BEGIN();
+    LOG_INFO("Timeslot process started\n");
+    static unsigned long delay = 1;
+    static char message[20];
+    waiting_for_timeslot = true;
+
+    nullnet_buf = (uint8_t *)&message;
+    nullnet_len = sizeof(message);
+    nullnet_set_input_callback(input_callback_timeslot);
+    //divide the window in timeslots
+    for (int i = 0; i < number_of_coordinators; i++){
+        timeslots[i] = (WINDOW_SIZE) / number_of_coordinators;
+    }
+
+    //calculate the start of timeslots for each coordinator
+    for (int i = 0; i < number_of_coordinators; i++){
+        if (i == 0){
+            timeslot_start[i] = 0;
+        }
+        else{
+            timeslot_start[i] = timeslot_start[i-1] + timeslots[i-1];
+        }
+    }
+
+    //add average_clock and delay to timeslot_start
+    for (int i = 0; i < number_of_coordinators; i++){
+        timeslot_start[i] += average_clock + delay ;
+    }
+    //send timeslot_start to all coordinators
+    for (int i = 0; i < number_of_coordinators; i++){
+        memcpy(&timeslot_start[i], nullnet_buf, sizeof(timeslot_start[i]));
+        LOG_INFO("Sending timeslot_start to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+        NETSTACK_NETWORK.output(&coordinator_list[i]);
+    }
+    //send timeslot to all coordinators
+    for (int i = 0; i < number_of_coordinators; i++){
+        memcpy(nullnet_buf, &timeslots[i], sizeof("timeslot"));
+        LOG_INFO("Sending timeslot to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+        NETSTACK_NETWORK.output(&coordinator_list[i]);
+    }
+    waiting_for_timeslot = false;
+    PROCESS_END();
+}
+
+/*---------------------------------------------------------------------------*/
+void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest){
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
+
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
+            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+        }
+        else {
+            LOG_INFO("Maximum number of coordinators reached\n");
+        }
+        return;
+    }
+    //if the message is stop, stop the process
+    if (strcmp(message, "stop") == 0){
+        LOG_INFO("Received stop message\n");
+        stop = true;
+    }
+
+}
+
+PROCESS_THREAD(setup_process, ev, data){
+    PROCESS_BEGIN();
+    LOG_INFO("Send message process started\n");
+    static struct etimer timer;
+    static char message[20];
+    static int inc = 0;
+
+    nullnet_buf = (uint8_t *)&message;
+    nullnet_len = sizeof(message);
+    nullnet_set_input_callback(input_callback_setup);
+
+    while(!stop){
+        //wait for the first coordinator to arrive
+        PROCESS_WAIT_EVENT_UNTIL(number_of_pending > 0);
+        //start synchronization
+        process_start(&synchronizaton, NULL);
+        //wait for synchronization to finish
+        PROCESS_WAIT_EVENT_UNTIL(waiting_for_sync == false);
+        //start timeslotting
+        process_start(&timeslotting, NULL);
+        //wait for timeslotting to finish
+        PROCESS_WAIT_EVENT_UNTIL(waiting_for_timeslot == false);
+        //start the listenning process
+
+        while( inc < number_of_coordinators){
+            //wait for the start of the timeslot
+            etimer_set(&timer, timeslot_start[inc] - (clock_time() + offset));
+            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+            if (inc == 0){
+                receiving_from = 0;
+                process_start(&collection_process, NULL);
+            }
+            etimer_set(&timer, timeslot_start[inc] + timeslots[inc] - (clock_time() + offset));
+            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+            receiving_from ++;
+            inc++;
+        }
+        //stop the collecting process
+        process_exit(&collection_process);
+        //empty all the list but the list_of_coordinators, number of coordinators, and number of pending
+        memset(&pending_list, 0, sizeof(pending_list));
+        memset(&timeslot_start, 0, sizeof(timeslot_start));
+        memset(&timeslots, 0, sizeof(timeslots));
+        memset(&average_clock, 0, sizeof(average_clock));
+        memset(&offset, 0, sizeof(offset));
+        receiving_from = -1;
+        type = -1;
+        waiting_for_sync = false;
+        waiting_for_timeslot = false;
+
+    }
+    PROCESS_END();
+}
