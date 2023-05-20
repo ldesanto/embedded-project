@@ -46,7 +46,7 @@ static int type = -1; // 0: sensor, 1: coordinator // -1 undecided
 
 static clock_time_t window_start = 0;
 static int window_size = WINDOW_SIZE;
-static int window_allotted = 100;
+static int window_allotted = WINDOW_SIZE;
 
 static const linkaddr_t edge_node = BORDER_NODE;
 
@@ -458,7 +458,7 @@ PROCESS_THREAD(main_coordinator, ev, data)
         // sleep for window_size - window_alloted seconds
         etimer_set(&window_timer, (window_size - window_allotted) + SETUP_WINDOW);
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
-    
+        LOG_INFO("COORDINATOR | end\n");
     }
     LOG_INFO("Exiting main_coordinator\n");
     PROCESS_END();
