@@ -291,7 +291,8 @@ void timeslotting() {
     }
     //calculate the start of each timeslot
     for (int i = 0; i < number_of_coordinators; i++){
-        timeslot_start[i] = (i * timeslots[i]) + average_clock + DELAY;
+        timeslot_start[i] = (i * timeslots[i]) + clock_time() + DELAY + offset;
+        LOG_INFO("BORDER | timeslot %d starts at %d\n", i, (int)timeslot_start[i]);
     }
 }
 
@@ -307,6 +308,7 @@ void sendTimeslots(){
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
         nullnet_len = sizeof(timeslot_start[i]);
         NETSTACK_NETWORK.output(&coordinator_list[i]);
+        LOG_INFO("BORDER | Sending start %d \n", (int)timeslot_start[i]);
         //sending timeslot
         memcpy(nullnet_buf, &timeslots[i], sizeof(timeslots[i]));
         nullnet_len = sizeof(timeslots[i]);
@@ -359,9 +361,11 @@ PROCESS_THREAD(init, ev, data){
         //free pending list
         memset(pending_list, 0, sizeof(pending_list));
         LOG_INFO("BORDER | synchronization finished\n");
-        //wait 10 seconds
+        //wait 1000 ticks
         etimer_set(&timer,WAIT_SYNC);
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer) || ev == PROCESS_EVENT_POLL);
+        //start timeslotting
+        timeslotting();
         if(slots_to_send){
             LOG_INFO("BORDER | Sending window slots\n");
             sendTimeslots();
