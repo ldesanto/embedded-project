@@ -12,12 +12,10 @@
 #define LOG_LEVEL LOG_LEVEL_INFO
 
 /* Configuration */
-#define WINDOW_SIZE 1 // window size in seconds
-#define MAX_COORDINATOR 10 // maximum number of coordinators
-#define MAX_SENSORS 50 // maximum number of sensors
-#define WAIT_SYNC 5 // time to wait for synchronization
-
-
+#define WINDOW_SIZE 2 // window size in seconds
+#define MAX_COORDINATOR 4 // maximum number of coordinators
+#define MAX_SENSORS  16// maximum number of sensors
+#define WAIT_SYNC 10 // time to wait for synchronization
 /*---------------------------------------------------------------------------*/
 PROCESS(init, "Init");
 PROCESS(setup_process, "Setup process");
@@ -475,6 +473,8 @@ void synchronization(){
         number_of_coordinators++;
     }
     waiting_for_sync = true;
+    number_of_pending = 0;
+    memset(&pending_list, 0, sizeof(pending_list));
 
 }
 
@@ -482,6 +482,7 @@ PROCESS_THREAD(init, ev, data){
     PROCESS_BEGIN();
     LOG_INFO("BORDER | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
     static char message[20];
+    static struct etimer timer;
     nullnet_buf = (uint8_t *)&message;
     nullnet_len = sizeof(message);
     nullnet_set_input_callback(input_callback);
@@ -517,9 +518,14 @@ PROCESS_THREAD(init, ev, data){
 
         //free coordinator clock list
         memset(coordinator_clock, 0, sizeof(coordinator_clock));
+        clock_received = 0;
+
         //free pending list
         memset(pending_list, 0, sizeof(pending_list));
         LOG_INFO("BORDER | synchronization finished\n");
+        //wait 10 seconds
+        etimer_set(&timer, CLOCK_SECOND * 10);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer) || ev == PROCESS_EVENT_POLL);
         state = 2;
     }
     PROCESS_END();
