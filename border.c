@@ -286,7 +286,7 @@ void timeslotting() {
     LOG_INFO("BORDER | starting timeslotting\n");
     state = 2;
     //divide the window into timeslots
-    for (int i = 0; number_of_coordinators; i++){
+    for (int i = 0; i < number_of_coordinators; i++){
         timeslots[i] = WINDOW_SIZE / number_of_coordinators;
     }
     //calculate the start of each timeslot
