@@ -51,6 +51,9 @@ static bool waiting_for_timeslot = false; // flag to indicate if the node is wai
 static int type = -1; // type of messsages active 1, inactive 0
 static bool stop = false; // flag to indicate if the node should exit
 /*---------------------------------------------------------------------------*/
+
+static int state = -1; // 0 : setup, 1 : synchronization, 2 : timeslotting, 3 : collection
+
 void assign_last_counts() {
     //if a sensor is not in the list, add it
     for (int i = 0; i <= number_of_sensors; i++) {
@@ -69,7 +72,75 @@ void assign_last_counts() {
         }
     }
 }
+void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest) {
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
+    LOG_INFO("BORDER | Received message from %d.%d: '%s'\n", source.u8[0], source.u8[1], message);
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
+            LOG_INFO("BORDER | Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+            LOG_INFO("BORDER | Number of pending coordinators: %d\n", number_of_pending);
+        }
+        else {
+            LOG_INFO("BORDER | Maximum number of coordinators reached\n");
+        }
+    }
+    else if (strcmp(message, "ping") == 0){
+        //a ping message was received from a coordinator without a sensor
+        LOG_INFO("BORDER | Received ping message from %d.%d\n", source.u8[0], source.u8[1]);
+        number_of_messages++;
+    }
+    else if (strcmp(message, "sensor") == 0){
+        LOG_INFO("BORDER | received sensor message from %d.%d\n", source.u8[0], source.u8[1]);
+        //a sensor message was received
+    }
+    else if (strcmp(message, "stop") == 0){
+        LOG_INFO("BORDER | received stop message from %d.%d\n", source.u8[0], source.u8[1]);
+        stop = true; // stop the border
+    }
+    else{
+        if(waiting_for_sync && (strcmp(message,"new") != 0)){
+            //if the node is waiting for synchronization and the message is not a new message
+            //it means that the message is a clock time
+            LOG_INFO("BORDER | Received clock time from %d.%d\n", source.u8[0], source.u8[1]);
+            coordinator_clock[clock_received] = atoi(message);
+            clock_received++;
+            if(clock_received == number_of_coordinators){
+                waiting_for_sync = false;
+                LOG_INFO("BORDER | Received all clock times\n");
+            }
+        }
 
+    }
+    process_poll(&init);
+}
+/*
+void input_callback_init(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest){
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
+    LOG_INFO("INIT | Received message from %d.%d: %s\n", source.u8[0], source.u8[1], message);
+
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
+            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+        }
+        else {
+            LOG_INFO("Maximum number of coordinators reached\n");
+        }
+    }
+    process_poll(&init);
+}
+*/
 void input_callback_collect(const void *data, uint16_t len,
   const linkaddr_t *src, const linkaddr_t *dest)
 {
@@ -138,7 +209,7 @@ void input_callback_synchronization(const void *data, uint16_t len, const linkad
 
     LOG_INFO("Received %s from %d.%d\n", message, source.u8[0], source.u8[1]);
     //wait for number of coordinators clock times to synchronize
-    if (waiting_for_sync && (strcmp(message, "new") !=0)){
+    if (waiting_for_sync && (strcmp(message, "new") != 0)){
         LOG_INFO("Received clock from %d.%d\n", source.u8[0], source.u8[1]);
         //if time message received, mark the coordinator as active
         coordinator_clock[clock_received] = atoi(message);
@@ -161,6 +232,7 @@ void input_callback_synchronization(const void *data, uint16_t len, const linkad
             LOG_INFO("Maximum number of coordinators reached\n");
         }
     }
+    process_poll(&synchronizaton);
 }
 
 //create a process that send "clock_request" to all coordinatorrs, as well as the pending ones
@@ -198,7 +270,7 @@ PROCESS_THREAD(synchronizaton, ev, data)
     waiting_for_sync = true;
     //wait for number of coordinators clock times to synchronize
     etimer_set(&timer, WAIT_SYNC * CLOCK_SECOND);
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+    PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_POLL);
 
     //calculate average clock time
     for (int i = 0; i < number_of_coordinators; i++){
@@ -382,47 +454,76 @@ PROCESS_THREAD(setup_process, ev, data){
     LOG_INFO("Stopping the process");
     PROCESS_END();
 }
-
-void input_callback_init(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest){
-    static char message[20];
-    static linkaddr_t source;
-    memcpy(&source, src, sizeof(linkaddr_t));
-    memcpy(message, data, len);
-    LOG_INFO("INIT | Received message from %d.%d: %s\n", source.u8[0], source.u8[1], message);
-
-    if (strcmp(message, "coordinator") == 0){
-        //a new coordinator arrived, add it to the list of pending coordinators
-        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
-            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
-            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
-            number_of_pending++;
-        }
-        else {
-            LOG_INFO("Maximum number of coordinators reached\n");
-        }
+void synchronization(){
+    LOG_INFO("BORDER | starting synchronization\n");
+    state = 1;
+    memset(coordinator_clock, 0, sizeof(coordinator_clock));
+    //send clock_request to all coordinators
+    for (int i = 0; i < number_of_coordinators; i++){
+        memcpy(nullnet_buf, "clock_request", sizeof("clock_request"));
+        LOG_INFO("BORDER | Sending clock_request to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+        nullnet_len = sizeof("clock_request");
+        NETSTACK_NETWORK.output(&coordinator_list[i]);
     }
-    process_poll(&init);
+    //send clock_request to all pending coordinators
+    for (int i = 0; i < number_of_pending; i++){
+        memcpy(nullnet_buf, "clock_request", sizeof("clock_request"));
+        LOG_INFO("BORDER | Sending clock_request to %d.%d\n", pending_list[i].u8[0], pending_list[i].u8[1]);
+        nullnet_len = sizeof("clock_request");
+        NETSTACK_NETWORK.output(&pending_list[i]);
+        //remove coordinator from the pending list and add it to the coordinator list
+        memcpy(&coordinator_list[number_of_coordinators], &pending_list[i], sizeof(linkaddr_t));
+        number_of_coordinators++;
+    }
+    waiting_for_sync = true;
+
 }
 
 PROCESS_THREAD(init, ev, data){
     PROCESS_BEGIN();
     linkaddr_set_node_addr(&border_addr);
-    LOG_INFO("INIT | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
-
+    LOG_INFO("BORDER | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
     static char message[20];
-
     nullnet_buf = (uint8_t *)&message;
     nullnet_len = sizeof(message);
-    nullnet_set_input_callback(input_callback_init);
-
+    nullnet_set_input_callback(input_callback);
     //send a message to all the nodes to start the setup process
+    state = 0;
+    LOG_INFO("BORDER | broadcasting border message\n");
     memcpy(message, "border", sizeof("border"));
     for (int i = 0; i < 20; i++){
         memcpy(nullnet_buf, &message, sizeof(message));
-        nullnet_len = sizeof(message);
+        nullnet_len = sizeof("message");
         NETSTACK_NETWORK.output(NULL);
     }
-    PROCESS_WAIT_EVENT_UNTIL(number_of_pending > 0 || ev == PROCESS_EVENT_POLL) ;
-    process_start(&setup_process, NULL);
+    //wait 5 seconds
+    PROCESS_WAIT_EVENT_UNTIL(number_of_coordinators > 0 || number_of_pending > 0);
+    while(!stop){
+        synchronization();
+        LOG_INFO("BORDER | Waiting for clock\n");
+        PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync);
+        //calculate average clock time
+        for (int i = 0; i < number_of_coordinators; i++){
+            average_clock += coordinator_clock[i];
+        }
+            average_clock += clock_time();
+            average_clock /= (number_of_coordinators + 1);
+
+        //calculate the offset between own clock and average clock
+        offset = average_clock - clock_time();
+        LOG_INFO("BORDER | Sending new clocktime\n");
+
+        memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
+        nullnet_len = sizeof(average_clock);
+        NETSTACK_NETWORK.output(NULL);
+
+        //free coordinator clock list
+        memset(coordinator_clock, 0, sizeof(coordinator_clock));
+        //free pending list
+        memset(pending_list, 0, sizeof(pending_list));
+        LOG_INFO("BORDER | synchronization finished\n");
+        state = 2;
+    }
     PROCESS_END();
 }
+
