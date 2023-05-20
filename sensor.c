@@ -404,7 +404,9 @@ PROCESS_THREAD(main_coordinator, ev, data)
     while (1){
         i=0;
         //LOG_INFO("COORDINATOR | start\n");
-        if (window_start != 0 && get_clock() <= window_start){
+        LOG_INFO("COORDINATOR | waiting\n");
+        PROCESS_WAIT_EVENT_UNTIL(window_start != 0 && get_clock() <= window_start);
+        //if (window_start != 0 && get_clock() <= window_start){
             LOG_INFO("COORDINATOR | start\n");
 
             etimer_set(&window_timer, window_allotted);
@@ -456,7 +458,7 @@ PROCESS_THREAD(main_coordinator, ev, data)
             // sleep for window_size - window_alloted seconds
             etimer_set(&window_timer, (window_size - window_allotted) + SETUP_WINDOW);
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
-        }
+        
     }
     LOG_INFO("Exiting main_coordinator\n");
     PROCESS_END();
