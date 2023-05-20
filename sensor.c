@@ -123,7 +123,6 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             nullnet_len = 50;
             NETSTACK_NETWORK.output(&parent);
             waiting_for_clock = true;
-            return;
         }
         // if the message is "window"
         else if (strcmp(message, "window") == 0) {
@@ -134,7 +133,6 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             memcpy(&window_start, message, len);
             waiting_for_window_start = false;
             waiting_for_window_allotted = true;
-            return;
         }
         else if (waiting_for_window_allotted) {
             // set the window allotted
@@ -142,15 +140,14 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             waiting_for_window_allotted = false;
             // wake up the process
             process_poll(&main_coordinator);
-            return;
         }
         else if (waiting_for_clock) {
             // set the clock offset equals to the difference between the clock received and the current clock
             clock_offset = clock_time() - *((clock_time_t*) message);
             LOG_INFO("New clock offset: %d\n", (int) clock_offset);
             waiting_for_clock = false;
-            return;
         }
+        return;
     }
 
     // if message is new, send our type
