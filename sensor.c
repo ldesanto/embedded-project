@@ -117,9 +117,9 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
         if (strcmp(message, "clock_request") == 0) {
             LOG_INFO("COORDINATOR | Sending clock\n");
             // send back the clock
-            //clock_time_t current_clock = get_clock();
-            memcpy(nullnet_buf, "test", sizeof("test"));
-            nullnet_len = sizeof("test");
+            clock_time_t current_clock = get_clock();
+            memcpy(nullnet_buf, current_clock, sizeof(current_clock));
+            nullnet_len = sizeof(current_clock);
             NETSTACK_NETWORK.output(&parent);
             waiting_for_clock = true;
         }
