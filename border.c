@@ -88,32 +88,27 @@ void input_callback_collect(const void *data, uint16_t len,
         else {
             LOG_INFO("Maximum number of coordinators reached\n");
         }
-        return;
     }
     else if (strcmp(message, "ping") == 0) {
         LOG_INFO("Received ping message from %d.%d\n", source.u8[0], source.u8[1]);
         number_of_messages ++;
-        return;
     }
     else if (strcmp(message, "sensor") == 0){
         // a message from a new sensor is about to be forwarded
         LOG_INFO("Received sensor message from %d.%d\n", source.u8[0], source.u8[1]);
         address_received = false;
         number_of_messages ++;
-        return;
     }
     else if (address_received){
         //if the address is already received, then we're listenning for the count
         LOG_INFO("Received count %s from %d.%d\n", message, last_sensor.u8[0], last_sensor.u8[1]);
         last_count = atoi(message);
-        return;
     }
     else {
         //if the address is not received, then we're listenning for the address
         LOG_INFO("Received address %s from %d.%d\n", message, source.u8[0], source.u8[1]);
         memcpy(&last_sensor, src, sizeof(linkaddr_t));
         address_received = true;
-        return;
     }
 }
 PROCESS_THREAD(collection_process, ev, data){
@@ -142,16 +137,16 @@ void input_callback_synchronization(const void *data, uint16_t len, const linkad
     memcpy(message, data, len);
 
     //wait for number of coordinators clock times to synchronize
-    if (waiting_for_sync && strcmp(message, "new") != 0){
+    if (waiting_for_sync && (strcmp(message, "new") !=0)){
         LOG_INFO("Received clock from %d.%d\n", source.u8[0], source.u8[1]);
         //if time message received, mark the coordinator as active
         coordinator_clock[clock_received] = atoi(message);
         clock_received++;
-
+        LOG_INFO("number of clocks received: %d\n", clock_received);
+        LOG_INFO("number of coordinators: %d\n", number_of_coordinators);
         if (clock_received == number_of_coordinators){
             waiting_for_sync = false;
         }
-        return;
     }
 
     if (strcmp(message, "coordinator") == 0){
@@ -164,7 +159,6 @@ void input_callback_synchronization(const void *data, uint16_t len, const linkad
         else {
             LOG_INFO("Maximum number of coordinators reached\n");
         }
-        return;
     }
 }
 
@@ -218,7 +212,6 @@ PROCESS_THREAD(synchronizaton, ev, data)
     memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
     NETSTACK_NETWORK.output(NULL);
 
-
     //free coordinator clock list
     memset(coordinator_clock, 0, sizeof(coordinator_clock));
     //free pending list
@@ -243,7 +236,6 @@ void input_callback_timeslot(const void *data, uint16_t len, const linkaddr_t *s
         else {
             LOG_INFO("Maximum number of coordinators reached\n");
         }
-        return;
     }
 }
 
