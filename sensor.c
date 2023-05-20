@@ -105,45 +105,6 @@ void input_callback_sensor(const void *data, uint16_t len, const linkaddr_t *src
     }
 }
 
-void message_from_parent(const char* message, uint16_t len) {
-   // if the message is "clock" send back the clock
-    if (strcmp(message, "clock_request") == 0) {
-        // send back the clock
-        clock_time_t clock = get_clock();
-        memcpy(nullnet_buf, &clock, sizeof(clock));
-        nullnet_len = sizeof(clock);
-        NETSTACK_NETWORK.output(&parent);
-        waiting_for_clock = true;
-        return;
-    }
-    // if the message is "window"
-    else if (strcmp(message, "window") == 0) {
-        waiting_for_window_start = true;
-    }
-    else if (waiting_for_window_start) {
-        // set the window start
-        memcpy(&window_start, message, len);
-        waiting_for_window_start = false;
-        waiting_for_window_allotted = true;
-        return;
-    }
-    else if (waiting_for_window_allotted) {
-        // set the window allotted
-        memcpy(&window_allotted, message, len);
-        waiting_for_window_allotted = false;
-        // wake up the process
-        process_poll(&main_coordinator);
-        return;
-    }
-    else if (waiting_for_clock) {
-        // set the clock offset equals to the difference between the clock received and the current clock
-        clock_offset = clock_time() - *((clock_time_t*) message);
-        LOG_INFO("New clock offset: %d\n", (int) clock_offset);
-        waiting_for_clock = false;
-        return;
-    }
-}
-
 void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
 {
     static char message[20];
@@ -154,8 +115,42 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
 
     // if message comes from parent, call message_from_parent()
     if (linkaddr_cmp(&source, &parent)) {
-        message_from_parent(message, len);
-        return;
+        // if the message is "clock" send back the clock
+        if (strcmp(message, "clock_request") == 0) {
+            // send back the clock
+            clock_time_t clock = get_clock();
+            memcpy(nullnet_buf, &clock, sizeof(clock));
+            nullnet_len = 50;
+            NETSTACK_NETWORK.output(&parent);
+            waiting_for_clock = true;
+            return;
+        }
+        // if the message is "window"
+        else if (strcmp(message, "window") == 0) {
+            waiting_for_window_start = true;
+        }
+        else if (waiting_for_window_start) {
+            // set the window start
+            memcpy(&window_start, message, len);
+            waiting_for_window_start = false;
+            waiting_for_window_allotted = true;
+            return;
+        }
+        else if (waiting_for_window_allotted) {
+            // set the window allotted
+            memcpy(&window_allotted, message, len);
+            waiting_for_window_allotted = false;
+            // wake up the process
+            process_poll(&main_coordinator);
+            return;
+        }
+        else if (waiting_for_clock) {
+            // set the clock offset equals to the difference between the clock received and the current clock
+            clock_offset = clock_time() - *((clock_time_t*) message);
+            LOG_INFO("New clock offset: %d\n", (int) clock_offset);
+            waiting_for_clock = false;
+            return;
+        }
     }
 
     // if message is new, send our type
@@ -409,8 +404,6 @@ PROCESS_THREAD(main_coordinator, ev, data)
     nullnet_len = sizeof(message);
     nullnet_set_input_callback(input_callback_coordinator);
 
-    }
-    
     static int i;
 
     while (1){
