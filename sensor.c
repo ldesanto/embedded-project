@@ -120,7 +120,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             // send back the clock
             clock_time_t current_clock = get_clock();
             memcpy(nullnet_buf, &current_clock, sizeof(current_clock));
-            nullnet_len = 50;
+            nullnet_len = sizeof(current_clock);
             NETSTACK_NETWORK.output(&parent);
             waiting_for_clock = true;
         }
