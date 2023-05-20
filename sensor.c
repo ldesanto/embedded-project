@@ -137,6 +137,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             memcpy(&window_allotted, message, sizeof(message));
             waiting_for_window_allotted = false;
             // wake up the process
+            LOG_INFO("COORDINATOR | Window start: %d, clock: %d\n", (int) window_start, (int) get_clock());
             process_poll(&main_coordinator);
         }
         else if (waiting_for_clock) {
