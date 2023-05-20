@@ -23,6 +23,7 @@
 #define WINDOW_SIZE 1000 // window size in ticks
 
 #define EDGE_NODE {{1,0}} // edge node address
+#define BORDER_NODE {{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77}}
 
 /*---------------------------------------------------------------------------*/
 PROCESS(setup_process, "setup_process");
@@ -49,6 +50,7 @@ static int window_size = WINDOW_SIZE;
 static int window_allotted = 100;
 
 static const linkaddr_t edge_node = EDGE_NODE;
+static const linkaddr_t border_node = BORDER_NODE;
 
 static bool waiting_for_clock = false;
 static bool waiting_for_window_start = false;
@@ -367,7 +369,8 @@ PROCESS_THREAD(setup_process, ev, data)
         type = 1;
         memcpy(nullnet_buf, "coordinator", sizeof("coordinator"));
         nullnet_len = sizeof("coordinator");
-        NETSTACK_NETWORK.output(NULL); 
+        NETSTACK_NETWORK.output(NULL);
+        LOG_INFO("coordinator sent\n");
     }
 
     if (type == 0) {

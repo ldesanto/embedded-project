@@ -15,18 +15,19 @@
 #define WINDOW_SIZE 1 // window size in seconds
 #define MAX_COORDINATOR 10 // maximum number of coordinators
 #define MAX_SENSORS 50 // maximum number of sensors
-#define WAIT_SYNC 2 // time to wait for synchronization
-#define EDGE_NODE { { 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } // edge node address
+#define WAIT_SYNC 5 // time to wait for synchronization
+
 
 /*---------------------------------------------------------------------------*/
-
+PROCESS(init, "Init");
 PROCESS(setup_process, "Setup process");
 PROCESS(collection_process, "Collection process");
 PROCESS(synchronizaton, "synchronizaton");
 PROCESS(timeslotting, "timeslotting");
 
-AUTOSTART_PROCESSES(&setup_process);
+AUTOSTART_PROCESSES(&init);
 
+static linkaddr_t border_addr = {{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77}};
 static bool address_received = false; // flag to indicate if the address was received
 static linkaddr_t last_sensor; // address of the last sensor from which a message was received
 static linkaddr_t sensors[MAX_SENSORS]; // list of sensors addresses
@@ -55,19 +56,16 @@ void assign_last_counts() {
     for (int i = 0; i <= number_of_sensors; i++) {
         if (linkaddr_cmp(&sensors[i], &last_sensor)) {
             count_of_sensors[i] = last_count;
-            return;
         }
         if (i == number_of_sensors - 1) {
             memcpy(&sensors[number_of_sensors], &last_sensor, sizeof(linkaddr_t));
             count_of_sensors[number_of_sensors] = last_count;
             number_of_sensors++;
-            return;
         }
         if (number_of_sensors == 0) {
             memcpy(&sensors[number_of_sensors], &last_sensor, sizeof(linkaddr_t));
             count_of_sensors[number_of_sensors] = last_count;
             number_of_sensors++;
-            return;
         }
     }
 }
@@ -144,7 +142,7 @@ void input_callback_synchronization(const void *data, uint16_t len, const linkad
     memcpy(message, data, len);
 
     //wait for number of coordinators clock times to synchronize
-    if (waiting_for_sync){
+    if (waiting_for_sync && strcmp(message, "new") != 0){
         LOG_INFO("Received clock from %d.%d\n", source.u8[0], source.u8[1]);
         //if time message received, mark the coordinator as active
         coordinator_clock[clock_received] = atoi(message);
@@ -276,11 +274,11 @@ PROCESS_THREAD(timeslotting, ev, data){
 
     //add average_clock and delay to timeslot_start
     for (int i = 0; i < number_of_coordinators; i++){
-        timeslot_start[i] += average_clock + delay ;
+        timeslot_start[i] += (average_clock + delay) ;
     }
     //send timeslot_start to all coordinators
     for (int i = 0; i < number_of_coordinators; i++){
-        memcpy(nullnet_buf, "window", sizeof(timeslot_start[i]));
+        memcpy(nullnet_buf, "window", sizeof("window"));
         NETSTACK_NETWORK.output(&coordinator_list[i]);
         memcpy(&timeslot_start[i], nullnet_buf, sizeof(timeslot_start[i]));
         LOG_INFO("Sending timeslot_start to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
@@ -288,7 +286,7 @@ PROCESS_THREAD(timeslotting, ev, data){
     }
     //send timeslot to all coordinators
     for (int i = 0; i < number_of_coordinators; i++){
-        memcpy(nullnet_buf, &timeslots[i], sizeof("timeslot"));
+        memcpy(nullnet_buf, &timeslots[i], sizeof(timeslots[i]));
         LOG_INFO("Sending timeslot to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
         NETSTACK_NETWORK.output(&coordinator_list[i]);
     }
@@ -321,12 +319,15 @@ void input_callback_setup(const void *data, uint16_t len, const linkaddr_t *src,
         LOG_INFO("Received stop message\n");
         stop = true;
     }
+    if (strcmp(message, "ping") == 0){
+        LOG_INFO("Received ping message\n");
+    }
 
 }
 
 PROCESS_THREAD(setup_process, ev, data){
     PROCESS_BEGIN();
-    LOG_INFO("Send message process started\n");
+    LOG_INFO(" set up process started\n");
 
     static struct etimer timer;
     static char message[20];
@@ -338,12 +339,12 @@ PROCESS_THREAD(setup_process, ev, data){
     nullnet_set_input_callback(input_callback_setup);
     etimer_set(&timer, CLOCK_SECOND * 5);
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-    while(!stop){
-        LOG_INFO("3\n");
-        //wait for the first coordinator to arrive
-        PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_POLL);
-        LOG_INFO("4\n");
 
+    if(number_of_pending == 0){
+        process_start(&init, NULL);
+    }
+
+    while(!stop){
         //start synchronization
         process_start(&synchronizaton, NULL);
         //wait for synchronization to finish
@@ -383,5 +384,48 @@ PROCESS_THREAD(setup_process, ev, data){
 
     }
     LOG_INFO("Stopping the process");
+    PROCESS_END();
+}
+
+void input_callback_init(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest){
+    static char message[20];
+    static linkaddr_t source;
+    memcpy(&source, src, sizeof(linkaddr_t));
+    memcpy(message, data, len);
+    LOG_INFO("INIT | Received message from %d.%d: %s\n", source.u8[0], source.u8[1], message);
+
+    if (strcmp(message, "coordinator") == 0){
+        //a new coordinator arrived, add it to the list of pending coordinators
+        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
+            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
+            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
+            number_of_pending++;
+        }
+        else {
+            LOG_INFO("Maximum number of coordinators reached\n");
+        }
+    }
+    process_poll(&init);
+}
+
+PROCESS_THREAD(init, ev, data){
+    PROCESS_BEGIN();
+    linkaddr_set_node_addr(&border_addr);
+    LOG_INFO("INIT | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
+
+    static char message[20];
+
+    nullnet_buf = (uint8_t *)&message;
+    nullnet_len = sizeof(message);
+    nullnet_set_input_callback(input_callback_init);
+
+    //send a message to all the nodes to start the setup process
+    memcpy(message, "border", sizeof("border"));
+    for (int i = 0; i < 20; i++){
+        memcpy(nullnet_buf, &message, sizeof(message));
+        NETSTACK_NETWORK.output(NULL);
+    }
+    PROCESS_WAIT_EVENT_UNTIL(number_of_pending > 0 || ev == PROCESS_EVENT_POLL) ;
+    process_start(&setup_process, NULL);
     PROCESS_END();
 }
