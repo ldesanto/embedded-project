@@ -27,7 +27,6 @@ PROCESS(timeslotting, "timeslotting");
 
 AUTOSTART_PROCESSES(&init);
 
-static linkaddr_t border_addr = {{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77}};
 static bool address_received = false; // flag to indicate if the address was received
 static linkaddr_t last_sensor; // address of the last sensor from which a message was received
 static linkaddr_t sensors[MAX_SENSORS]; // list of sensors addresses
@@ -481,7 +480,6 @@ void synchronization(){
 
 PROCESS_THREAD(init, ev, data){
     PROCESS_BEGIN();
-    linkaddr_set_node_addr(&border_addr);
     LOG_INFO("BORDER | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
     static char message[20];
     nullnet_buf = (uint8_t *)&message;
@@ -493,7 +491,7 @@ PROCESS_THREAD(init, ev, data){
     memcpy(message, "border", sizeof("border"));
     for (int i = 0; i < 20; i++){
         memcpy(nullnet_buf, &message, sizeof(message));
-        nullnet_len = sizeof("message");
+        nullnet_len = sizeof(message);
         NETSTACK_NETWORK.output(NULL);
     }
     //wait 5 seconds
@@ -501,7 +499,7 @@ PROCESS_THREAD(init, ev, data){
     while(!stop){
         synchronization();
         LOG_INFO("BORDER | Waiting for clock\n");
-        PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync);
+        PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync || ev == PROCESS_EVENT_POLL);
         //calculate average clock time
         for (int i = 0; i < number_of_coordinators; i++){
             average_clock += coordinator_clock[i];

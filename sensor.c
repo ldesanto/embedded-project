@@ -22,7 +22,7 @@
 
 #define WINDOW_SIZE 1000 // window size in ticks
 
-#define BORDER_NODE {{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77}}
+#define BORDER_NODE {{1,0}}
 
 /*---------------------------------------------------------------------------*/
 PROCESS(setup_process, "setup_process");
@@ -110,7 +110,6 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
     memcpy(&source, src, sizeof(linkaddr_t));
     memcpy(&message, data, len);
     LOG_INFO("COORDINATOR | Received %s from %d.%d to %d.%d\n", message, src->u8[0], src->u8[1], dest->u8[0], dest->u8[1]);
-
     // if message comes from parent, call message_from_parent()
     if (linkaddr_cmp(&source, &parent)) {
         // if the message is "clock" send back the clock
@@ -371,8 +370,8 @@ PROCESS_THREAD(setup_process, ev, data)
     }
     
     // sleep for 2 seconds
-    etimer_set(&periodic_timer, 2 * CLOCK_SECOND);
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
+    //etimer_set(&periodic_timer, 2 * CLOCK_SECOND);
+    //PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
 
     // if we are coordinator, start the main_coordinator process
     if (type == 1) {
