@@ -22,7 +22,6 @@
 
 #define WINDOW_SIZE 1000 // window size in ticks
 
-#define EDGE_NODE {{1,0}} // edge node address
 #define BORDER_NODE {{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77}}
 
 /*---------------------------------------------------------------------------*/
@@ -49,8 +48,7 @@ static clock_time_t window_start = 0;
 static int window_size = WINDOW_SIZE;
 static int window_allotted = 100;
 
-static const linkaddr_t edge_node = EDGE_NODE;
-static const linkaddr_t border_node = BORDER_NODE;
+static const linkaddr_t edge_node = BORDER_NODE;
 
 static bool waiting_for_clock = false;
 static bool waiting_for_window_start = false;
