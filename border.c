@@ -51,7 +51,6 @@ static clock_time_t timeslot_start[MAX_COORDINATOR] ; // start time of the times
 static int receiving_from = -1; // index of the coordinator from which the node is receiving
 static int number_of_messages = 0; // number of messages received per window
 static bool slots_to_send = false; // flag to indicate if the node is waiting for a timeslot
-static int type = -1;
 static bool stop = false; // flag to indicate if the node should exit
 /*---------------------------------------------------------------------------*/
 
@@ -176,7 +175,7 @@ void input_callback_collect(const void *data, uint16_t len,
         address_received = true;
     }
 }
-PROCESS_THREAD(collection_process, ev, data){
+/*PROCESS_THREAD(collection_process, ev, data){
     static struct etimer timer;
     static char message[20];
     PROCESS_BEGIN()
@@ -255,7 +254,7 @@ PROCESS_THREAD(setup_process, ev, data){
     }
     LOG_INFO("Stopping the process");
     PROCESS_END();
-}
+}*/
 void synchronization(){
     LOG_INFO("BORDER | starting synchronization\n");
     state = 1;
