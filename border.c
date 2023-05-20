@@ -25,10 +25,6 @@ PROCESS(timeslotting, "timeslotting");
 
 AUTOSTART_PROCESSES(&init);
 
-<<<<<<< HEAD
-static linkaddr_t border_addr = {{0, 1}};
-=======
->>>>>>> 36aa9a3951aea7a2406442fee859ac55490b3d96
 static bool address_received = false; // flag to indicate if the address was received
 static linkaddr_t last_sensor; // address of the last sensor from which a message was received
 static linkaddr_t sensors[MAX_SENSORS]; // list of sensors addresses

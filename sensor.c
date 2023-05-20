@@ -20,13 +20,9 @@
 #define MAX_CHILDREN 10 // max number of children
 #define DATA_LENGTH 1 // length of data to send
 
-#define WINDOW_SIZE 1000 // window size in ticks
-
-<<<<<<< HEAD
-#define BORDER_NODE {{0,1}}
-=======
+#define WINDOW_SIZE 2000 // window size in ticks
+#define SETUP_WINDOW 1000
 #define BORDER_NODE {{1,0}}
->>>>>>> 36aa9a3951aea7a2406442fee859ac55490b3d96
 
 /*---------------------------------------------------------------------------*/
 PROCESS(setup_process, "setup_process");
@@ -456,7 +452,7 @@ PROCESS_THREAD(main_coordinator, ev, data)
         }
 
          // sleep for window_size - window_alloted seconds
-        etimer_set(&window_timer, window_size - window_allotted);
+        etimer_set(&window_timer, (window_size - window_allotted) + SETUP_WINDOW);
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
 
     }
