@@ -345,21 +345,14 @@ PROCESS_THREAD(init, ev, data){
         PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync || ev == PROCESS_EVENT_POLL);
         //calculate average clock time
         for (int i = 0; i < number_of_coordinators; i++){
-            LOG_INFO("BORDER | %d has clock %d\n", i, (int) coordinator_clock[i]);
-            LOG_INFO("BORDER | average clock is %d\n", (int) average_clock);
             average_clock += coordinator_clock[i];
         }
         average_clock += clock_time();
-        LOG_INFO("BORDER | average clock is %d\n", (int) average_clock);
         // log the number of coordinators
-        LOG_INFO("BORDER | number of coordinators is %d\n", number_of_coordinators);
-        average_clock /= (number_of_coordinators + 1);
-        LOG_INFO("BORDER | average clock is %d\n", (int) average_clock);
-        LOG_INFO("BORDER | clock time is %d\n", (int) clock_time());
+        average_clock = (clock_time_t) ((int)average_clock)/(number_of_coordinators + 1);
         //calculate the offset between own clock and average clock
         offset = average_clock - clock_time();
         LOG_INFO("BORDER | Sending new clocktime (%d, %d)\n",(int) clock_time(), (int) average_clock);
-
         memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
         nullnet_len = sizeof(average_clock);
         NETSTACK_NETWORK.output(NULL);
