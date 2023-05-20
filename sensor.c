@@ -122,30 +122,32 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             NETSTACK_NETWORK.output(&parent);
             waiting_for_clock = true;
         }
+        else if (waiting_for_clock) {
+            // set the clock offset equals to the difference between the clock received and the current clock
+            int temp = 0;
+            memcpy(&temp, message, sizeof(temp));
+            int new_clock_offset = clock_time() - temp;
+            memcpy(&clock_offset, &new_clock_offset, sizeof(clock_offset));
+            LOG_INFO("New clock offset: %d\n", (int) clock_offset);
+            waiting_for_clock = false;
+        }
         // if the message is "window"
         else if (strcmp(message, "window") == 0) {
             waiting_for_window_start = true;
         }
         else if (waiting_for_window_start) {
             // set the window start
-            memcpy(&window_start, message, sizeof(message));
+            memcpy(&window_start, message, sizeof(window_start));
             waiting_for_window_start = false;
             waiting_for_window_allotted = true;
         }
         else if (waiting_for_window_allotted) {
             // set the window allotted
-            memcpy(&window_allotted, message, sizeof(message));
+            memcpy(&window_allotted, message, sizeof(window_allotted));
             waiting_for_window_allotted = false;
-            // wake up the process
-            LOG_INFO("COORDINATOR | Window start: %d, clock: %d\n", (int) window_start, (int) get_clock());
-            process_poll(&main_coordinator);
+            LOG_INFO("COORDINATOR | Window start: %d, clock: %d, window_alloted: %d\n", (int) window_start, (int) get_clock(), (int) window_allotted);
         }
-        else if (waiting_for_clock) {
-            // set the clock offset equals to the difference between the clock received and the current clock
-            clock_offset = clock_time() - atoi(message);
-            LOG_INFO("New clock offset: %d\n", (int) clock_offset);
-            waiting_for_clock = false;
-        }
+        
         return;
     }
 
@@ -404,11 +406,17 @@ PROCESS_THREAD(main_coordinator, ev, data)
 
     while (1){
         i=0;
-        LOG_INFO("COORDINATOR | waiting\n");
-        PROCESS_WAIT_EVENT_UNTIL((window_start != 0) && (get_clock() <= window_start));
         LOG_INFO("COORDINATOR | start\n");
 
-        etimer_set(&window_timer, window_allotted);
+        // sleep for window_size - window_alloted seconds
+        LOG_INFO("COORDINATOR | sleep for %d ticks\n", window_size - window_allotted + SETUP_WINDOW);
+        
+        etimer_set(&window_timer, window_size - window_allotted + SETUP_WINDOW);
+
+        PROCESS_WAIT_EVENT_UNTIL(((window_start != 0) && (get_clock() >= window_start)) || etimer_expired(&window_timer));
+        
+        LOG_INFO("COORDINATOR | continue\n");
+        
         // if we have no children, send "ping" to parent
         if (children_size == 0) {
             LOG_INFO("COORDINATOR | Sending ping to parent\n");
@@ -416,8 +424,10 @@ PROCESS_THREAD(main_coordinator, ev, data)
             nullnet_len = sizeof("ping");
             NETSTACK_NETWORK.output(&parent);
         }
-
-        while(i < children_size || etimer_expired(&window_timer)) {
+        
+        etimer_set(&window_timer, window_allotted);
+        
+        while(i < children_size && !etimer_expired(&window_timer)) {
 
             // send "sensor" to parent
             memcpy(nullnet_buf, "sensor", sizeof("sensor"));
@@ -454,10 +464,6 @@ PROCESS_THREAD(main_coordinator, ev, data)
                 }   
             }
         }
-        LOG_INFO("COORDINATOR | waiting for window_size %d, %d\n", window_size, window_allotted);
-        // sleep for window_size - window_alloted seconds
-        etimer_set(&window_timer, (window_size - window_allotted) + SETUP_WINDOW);
-        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
         LOG_INFO("COORDINATOR | end\n");
     }
     LOG_INFO("Exiting main_coordinator\n");
