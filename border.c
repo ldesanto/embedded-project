@@ -136,6 +136,7 @@ void input_callback_synchronization(const void *data, uint16_t len, const linkad
     memcpy(&source, src, sizeof(linkaddr_t));
     memcpy(message, data, len);
 
+    LOG_INFO("Received %s from %d.%d\n", message, source.u8[0], source.u8[1]);
     //wait for number of coordinators clock times to synchronize
     if (waiting_for_sync && (strcmp(message, "new") !=0)){
         LOG_INFO("Received clock from %d.%d\n", source.u8[0], source.u8[1]);
@@ -181,12 +182,14 @@ PROCESS_THREAD(synchronizaton, ev, data)
     for (int i = 0; i < number_of_coordinators; i++){
         memcpy(nullnet_buf, "clock_request", sizeof("clock_request"));
         LOG_INFO("Sending clock_request to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+        nullnet_len = sizeof("clock_request");
         NETSTACK_NETWORK.output(&coordinator_list[i]);
     }
     //send clock_request to all pending coordinators
     for (int i = 0; i < number_of_pending; i++){
         memcpy(nullnet_buf, "clock_request", sizeof("clock_request"));
         LOG_INFO("Sending clock_request to %d.%d\n", pending_list[i].u8[0], pending_list[i].u8[1]);
+        nullnet_len = sizeof("clock_request");
         NETSTACK_NETWORK.output(&pending_list[i]);
         //remove coordinator from the pending list and add it to the coordinator list
         memcpy(&coordinator_list[number_of_coordinators], &pending_list[i], sizeof(linkaddr_t));
@@ -210,6 +213,7 @@ PROCESS_THREAD(synchronizaton, ev, data)
     LOG_INFO("Sending new clocktime\n");
     //send synchronization message to all coordinators
     memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
+    nullnet_len = sizeof(average_clock);
     NETSTACK_NETWORK.output(NULL);
 
     //free coordinator clock list
@@ -415,6 +419,7 @@ PROCESS_THREAD(init, ev, data){
     memcpy(message, "border", sizeof("border"));
     for (int i = 0; i < 20; i++){
         memcpy(nullnet_buf, &message, sizeof(message));
+        nullnet_len = sizeof(message);
         NETSTACK_NETWORK.output(NULL);
     }
     PROCESS_WAIT_EVENT_UNTIL(number_of_pending > 0 || ev == PROCESS_EVENT_POLL) ;
