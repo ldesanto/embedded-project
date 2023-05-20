@@ -405,6 +405,8 @@ PROCESS_THREAD(main_coordinator, ev, data)
         i=0;
         LOG_INFO("COORDINATOR | start\n");
         if (window_start != 0 && get_clock() <= window_start){
+            LOG_INFO("COORDINATOR | start\n");
+
             etimer_set(&window_timer, window_allotted);
             // if we have no children, send "ping" to parent
             if (children_size == 0) {
@@ -450,12 +452,11 @@ PROCESS_THREAD(main_coordinator, ev, data)
                     }   
                 }
             }
+            LOG_INFO("COORDINATOR | waiting for window_size\n");
+            // sleep for window_size - window_alloted seconds
+            etimer_set(&window_timer, (window_size - window_allotted) + SETUP_WINDOW);
+            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
         }
-
-         // sleep for window_size - window_alloted seconds
-        etimer_set(&window_timer, (window_size - window_allotted) + SETUP_WINDOW);
-        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
-
     }
     LOG_INFO("Exiting main_coordinator\n");
     PROCESS_END();
