@@ -28,8 +28,6 @@
 #define DELAY 1000 // delay between messages
 /*---------------------------------------------------------------------------*/
 PROCESS(init, "Init");
-PROCESS(setup_process, "Setup process");
-PROCESS(collection_process, "Collection process");
 
 AUTOSTART_PROCESSES(&init);
 
@@ -53,7 +51,7 @@ static clock_time_t timeslot_start[MAX_COORDINATOR] ; // start time of the times
 static int receiving_from = -1; // index of the coordinator from which the node is receiving
 static int number_of_messages = 0; // number of messages received per window
 static bool slots_to_send = false; // flag to indicate if the node is waiting for a timeslot
-static int type = -1; // type of messsages active 1, inactive 0
+static int type = -1;
 static bool stop = false; // flag to indicate if the node should exit
 /*---------------------------------------------------------------------------*/
 
@@ -103,7 +101,8 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
     }
     else if (strcmp(message, "sensor") == 0){
         LOG_INFO("BORDER | received sensor message from %d.%d\n", source.u8[0], source.u8[1]);
-        //a sensor message was received
+        address_received = false;
+        number_of_messages++;
     }
     else if (strcmp(message, "stop") == 0){
         LOG_INFO("BORDER | received stop message from %d.%d\n", source.u8[0], source.u8[1]);
@@ -121,7 +120,17 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
                 LOG_INFO("BORDER | Received all clock times\n");
             }
         }
-
+        else if(address_received && (strcmp(message,"new") != 0)){
+            //if the address is already received , then the message is the count
+            LOG_INFO("BORDER | Received count from %d.%d\n", last_sensor.u8[0], last_sensor.u8[1]);
+            last_count = atoi(message);
+        }
+        else if(!address_received && (strcmp(message,"new") != 0)){
+            //if the message is a new message, then the next message will be the address
+            LOG_INFO("BORDER | Received address %s from %d.%d\n", message, source.u8[0], source.u8[1]);
+            memcpy(&last_sensor, src, sizeof(linkaddr_t));
+            address_received = true;
+        }
     }
     process_poll(&init);
 }
@@ -358,9 +367,23 @@ PROCESS_THREAD(init, ev, data){
             LOG_INFO("BORDER | Sending window slots\n");
             sendTimeslots();
         }
+        //wait until the first timeslot starts
+        etimer_set(&timer, timeslot_start[0] - clock_time() + offset);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+        state = 3;
         LOG_INFO("BORDER | Starting window\n");
-
-        stop = true;
+        //update the receiving from coordinator list
+        for (int i = 0; i < number_of_coordinators; i++){
+            receiving_from = i;
+            LOG_INFO("BORDER | Receiving from %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+            etimer_set(&timer, timeslots[i]);
+            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+            //TODO remove the coordinator that didn't send a message
+            number_of_messages = 0;
+        }
+        LOG_INFO("BORDER | Window finished\n");
+        state = -1;
     }
     PROCESS_END();
 }
+
