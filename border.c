@@ -12,12 +12,10 @@
 #define LOG_LEVEL LOG_LEVEL_INFO
 
 /* Configuration */
-#define WINDOW_SIZE 1 // window size in seconds
-#define MAX_COORDINATOR 10 // maximum number of coordinators
-#define MAX_SENSORS 50 // maximum number of sensors
-#define WAIT_SYNC 5 // time to wait for synchronization
-
-
+#define WINDOW_SIZE 2 // window size in seconds
+#define MAX_COORDINATOR 4 // maximum number of coordinators
+#define MAX_SENSORS  16// maximum number of sensors
+#define WAIT_SYNC 10 // time to wait for synchronization
 /*---------------------------------------------------------------------------*/
 PROCESS(init, "Init");
 PROCESS(setup_process, "Setup process");
@@ -27,7 +25,10 @@ PROCESS(timeslotting, "timeslotting");
 
 AUTOSTART_PROCESSES(&init);
 
+<<<<<<< HEAD
 static linkaddr_t border_addr = {{0, 1}};
+=======
+>>>>>>> 36aa9a3951aea7a2406442fee859ac55490b3d96
 static bool address_received = false; // flag to indicate if the address was received
 static linkaddr_t last_sensor; // address of the last sensor from which a message was received
 static linkaddr_t sensors[MAX_SENSORS]; // list of sensors addresses
@@ -476,14 +477,16 @@ void synchronization(){
         number_of_coordinators++;
     }
     waiting_for_sync = true;
+    number_of_pending = 0;
+    memset(&pending_list, 0, sizeof(pending_list));
 
 }
 
 PROCESS_THREAD(init, ev, data){
     PROCESS_BEGIN();
-    linkaddr_set_node_addr(&border_addr);
     LOG_INFO("BORDER | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
     static char message[20];
+    static struct etimer timer;
     nullnet_buf = (uint8_t *)&message;
     nullnet_len = sizeof(message);
     nullnet_set_input_callback(input_callback);
@@ -493,7 +496,7 @@ PROCESS_THREAD(init, ev, data){
     memcpy(message, "border", sizeof("border"));
     for (int i = 0; i < 20; i++){
         memcpy(nullnet_buf, &message, sizeof(message));
-        nullnet_len = sizeof("message");
+        nullnet_len = sizeof(message);
         NETSTACK_NETWORK.output(NULL);
     }
     //wait 5 seconds
@@ -501,7 +504,7 @@ PROCESS_THREAD(init, ev, data){
     while(!stop){
         synchronization();
         LOG_INFO("BORDER | Waiting for clock\n");
-        PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync);
+        PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync || ev == PROCESS_EVENT_POLL);
         //calculate average clock time
         for (int i = 0; i < number_of_coordinators; i++){
             average_clock += coordinator_clock[i];
@@ -519,9 +522,14 @@ PROCESS_THREAD(init, ev, data){
 
         //free coordinator clock list
         memset(coordinator_clock, 0, sizeof(coordinator_clock));
+        clock_received = 0;
+
         //free pending list
         memset(pending_list, 0, sizeof(pending_list));
         LOG_INFO("BORDER | synchronization finished\n");
+        //wait 10 seconds
+        etimer_set(&timer, CLOCK_SECOND * 10);
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer) || ev == PROCESS_EVENT_POLL);
         state = 2;
     }
     PROCESS_END();
