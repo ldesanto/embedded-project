@@ -118,8 +118,8 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
         // if the message is "clock" send back the clock
         if (strcmp(message, "clock_request") == 0) {
             // send back the clock
-            clock_time_t clock = get_clock();
-            memcpy(nullnet_buf, &clock, sizeof(clock));
+            clock_time_t current_clock = get_clock();
+            memcpy(nullnet_buf, &current_clock, sizeof(current_clock));
             nullnet_len = 50;
             NETSTACK_NETWORK.output(&parent);
             waiting_for_clock = true;
