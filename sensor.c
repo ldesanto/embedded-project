@@ -409,61 +409,57 @@ PROCESS_THREAD(main_coordinator, ev, data)
     nullnet_len = sizeof(message);
     nullnet_set_input_callback(input_callback_coordinator);
 
-    if (window_start != 0){
-        // wait until the clock time is equal to the window start time
-        while (get_clock() != window_start) {
-            
-        }
     }
     
     static int i;
 
     while (1){
         i=0;
+        if (window_start != 0 && get_clock() <= window_start){
+            etimer_set(&window_timer, window_allotted);
+            // if we have no children, send "ping" to parent
+            if (children_size == 0) {
+                memcpy(nullnet_buf, "ping", sizeof("ping"));
+                nullnet_len = sizeof("ping");
+                NETSTACK_NETWORK.output(&parent);
+            }
 
-        etimer_set(&window_timer, window_allotted);
-        // if we have no children, send "ping" to parent
-        if (children_size == 0) {
-            memcpy(nullnet_buf, "ping", sizeof("ping"));
-            nullnet_len = sizeof("ping");
-            NETSTACK_NETWORK.output(&parent);
-        }
+            while(i < children_size || etimer_expired(&window_timer)) {
 
-        while(i < children_size || etimer_expired(&window_timer)) {
+                // send "sensor" to parent
+                memcpy(nullnet_buf, "sensor", sizeof("sensor"));
+                nullnet_len = sizeof("sensor");
+                NETSTACK_NETWORK.output(&parent);
 
-            // send "sensor" to parent
-            memcpy(nullnet_buf, "sensor", sizeof("sensor"));
-            nullnet_len = sizeof("sensor");
-            NETSTACK_NETWORK.output(&parent);
+                // send the child address to the parent
+                memcpy(nullnet_buf, &children[i], sizeof(linkaddr_t));
+                nullnet_len = sizeof(linkaddr_t);
+                NETSTACK_NETWORK.output(&parent);
 
-            // send the child address to the parent
-            memcpy(nullnet_buf, &children[i], sizeof(linkaddr_t));
-            nullnet_len = sizeof(linkaddr_t);
-            NETSTACK_NETWORK.output(&parent);
+                // send the poll to the child
+                LOG_INFO("Sending poll message %d, children size %d\n", i, children_size);
+                memcpy(nullnet_buf, "poll", sizeof("poll"));
+                nullnet_len = sizeof("poll");
+                current_child = children[i];
+                NETSTACK_NETWORK.output(&current_child);
+                i++;
 
-            // send the poll to the child
-            LOG_INFO("Sending poll message %d, children size %d\n", i, children_size);
-            memcpy(nullnet_buf, "poll", sizeof("poll"));
-            nullnet_len = sizeof("poll");
-            current_child = children[i];
-            NETSTACK_NETWORK.output(&current_child);
-            i++;
-
-            // wait until the window timer expires or we receive a "done" from the child
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer) || ev == PROCESS_EVENT_POLL);
-            if (etimer_expired(&window_timer)) {
-                LOG_INFO("Sensor %d timeout\n", i);
-                
-                // remove the child from the children list
-                for (int j = 0; j < children_size; j++) {
-                    if (linkaddr_cmp(&children[j], &current_child)) {
-                        for (int k = j; k < children_size - 1; k++) {
-                            memcpy(&children[k], &children[k+1], sizeof(linkaddr_t));
+                // wait until the window timer expires or we receive a "done" from the child
+                PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer) || ev == PROCESS_EVENT_POLL);
+                if (etimer_expired(&window_timer)) {
+                    LOG_INFO("Sensor %d timeout\n", i);
+                    
+                    // remove the child from the children list
+                    for (int j = 0; j < children_size; j++) {
+                        if (linkaddr_cmp(&children[j], &current_child)) {
+                            for (int k = j; k < children_size - 1; k++) {
+                                memcpy(&children[k], &children[k+1], sizeof(linkaddr_t));
+                            }
+                            children_size--;
+                            break;
                         }
-                        children_size--;
-                        break;
-                    }
-                }   
+                    }   
+                }
             }
         }
 
