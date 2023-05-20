@@ -136,14 +136,14 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
         }
         else if (waiting_for_window_allotted) {
             // set the window allotted
-            memcpy(&window_allotted, message, izeof(message));
+            memcpy(&window_allotted, message, sizeof(message));
             waiting_for_window_allotted = false;
             // wake up the process
             process_poll(&main_coordinator);
         }
         else if (waiting_for_clock) {
             // set the clock offset equals to the difference between the clock received and the current clock
-            clock_offset = clock_time() - *((clock_time_t*) message);
+            clock_offset = clock_time() - (clock_time_t*) message;
             LOG_INFO("New clock offset: %d\n", (int) clock_offset);
             waiting_for_clock = false;
         }
