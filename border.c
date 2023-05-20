@@ -88,6 +88,7 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             number_of_pending++;
             LOG_INFO("BORDER | Number of pending coordinators: %d\n", number_of_pending);
             slots_to_send = true;
+            process_poll(&init);
         }
         else {
             LOG_INFO("BORDER | Maximum number of coordinators reached\n");
@@ -112,12 +113,13 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             //if the node is waiting for synchronization and the message is not a new message
             //it means that the message is a clock time
             LOG_INFO("BORDER | Received clock time from %d.%d\n", source.u8[0], source.u8[1]);
-            coordinator_clock[clock_received] = atoi(message);
+            memcpy(&coordinator_clock[clock_received], message, sizeof(clock_time_t));
             clock_received++;
             if(clock_received == number_of_coordinators){
                 waiting_for_sync = false;
                 LOG_INFO("BORDER | Received all clock times\n");
             }
+            process_poll(&init);
         }
         else if(address_received && (strcmp(message,"new") != 0)){
             //if the address is already received , then the message is the count
@@ -131,7 +133,7 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             address_received = true;
         }
     }
-    process_poll(&init);
+    //process_poll(&init);
 }
 
 void input_callback_collect(const void *data, uint16_t len,
@@ -338,18 +340,25 @@ PROCESS_THREAD(init, ev, data){
     PROCESS_WAIT_EVENT_UNTIL(number_of_coordinators > 0 || number_of_pending > 0);
     while(!stop){
         synchronization();
+        average_clock = 0;
         LOG_INFO("BORDER | Waiting for clock\n");
         PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync || ev == PROCESS_EVENT_POLL);
         //calculate average clock time
         for (int i = 0; i < number_of_coordinators; i++){
+            LOG_INFO("BORDER | %d has clock %d\n", i, (int) coordinator_clock[i]);
+            LOG_INFO("BORDER | average clock is %d\n", (int) average_clock);
             average_clock += coordinator_clock[i];
         }
-            average_clock += clock_time();
-            average_clock /= (number_of_coordinators + 1);
-
+        average_clock += clock_time();
+        LOG_INFO("BORDER | average clock is %d\n", (int) average_clock);
+        // log the number of coordinators
+        LOG_INFO("BORDER | number of coordinators is %d\n", number_of_coordinators);
+        average_clock /= (number_of_coordinators + 1);
+        LOG_INFO("BORDER | average clock is %d\n", (int) average_clock);
+        LOG_INFO("BORDER | clock time is %d\n", (int) clock_time());
         //calculate the offset between own clock and average clock
         offset = average_clock - clock_time();
-        LOG_INFO("BORDER | Sending new clocktime\n");
+        LOG_INFO("BORDER | Sending new clocktime (%d, %d)\n",(int) clock_time(), (int) average_clock);
 
         memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
         nullnet_len = sizeof(average_clock);
@@ -371,18 +380,23 @@ PROCESS_THREAD(init, ev, data){
             sendTimeslots();
         }
         //wait until the first timeslot starts
+        LOG_INFO("BORDER | Waiting for first timeslot, %d ticks\n", (int)timeslot_start[0] - (int) clock_time() + (int) offset);
+        LOG_INFO("BORDER | %d, %d, %d\n", (int)timeslot_start[0], (int) clock_time(), (int) offset);
         etimer_set(&timer, timeslot_start[0] - clock_time() + offset);
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
         state = 3;
         LOG_INFO("BORDER | Starting window\n");
         //update the receiving from coordinator list
-        for (int i = 0; i < number_of_coordinators; i++){
-            receiving_from = i;
-            LOG_INFO("BORDER | Receiving from %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
-            etimer_set(&timer, timeslots[i]);
+        static int i2 = 0;
+        while (i2 < number_of_coordinators){
+            receiving_from = i2;
+            LOG_INFO("BORDER | Receiving from %d.%d\n", coordinator_list[i2].u8[0], coordinator_list[i2].u8[1]);
+            etimer_set(&timer, timeslots[i2]);
+            LOG_INFO("BORDER | Waiting for %d ticks (%d, %d)\n", (int) timeslots[i2], i2, number_of_coordinators);
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
             //TODO remove the coordinator that didn't send a message
             number_of_messages = 0;
+            i2++;
         }
         LOG_INFO("BORDER | Window finished\n");
         state = -1;

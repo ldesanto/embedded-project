@@ -16,7 +16,7 @@
 #define MAX_CANDIDATE 10 // max number of candidates
 #define MAX_RETRIES 2 // max number of retries to find a parent
 #define GATHER_TIME 2 // time to gather candidates (in seconds)
-#define MAX_WAIT 5 // max wait time for a response from parent (in seconds)
+#define MAX_WAIT 60 // max wait time for a response from parent (in seconds)
 #define MAX_CHILDREN 10 // max number of children
 #define DATA_LENGTH 1 // length of data to send
 
@@ -128,7 +128,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             memcpy(&temp, message, sizeof(temp));
             int new_clock_offset = clock_time() - temp;
             memcpy(&clock_offset, &new_clock_offset, sizeof(clock_offset));
-            LOG_INFO("New clock offset: %d\n", (int) clock_offset);
+            LOG_INFO("New clock offset: %d, (%d, %d)\n", (int) clock_offset, (int) clock_time(), temp);
             waiting_for_clock = false;
         }
         // if the message is "window"
@@ -146,6 +146,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             memcpy(&window_allotted, message, sizeof(window_allotted));
             waiting_for_window_allotted = false;
             LOG_INFO("COORDINATOR | Window start: %d, clock: %d, window_alloted: %d\n", (int) window_start, (int) get_clock(), (int) window_allotted);
+            process_poll(&main_coordinator);
         }
         
         return;
@@ -175,6 +176,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
     // if message is "done", wake up the process
     else if (strcmp(message, "done") == 0 && linkaddr_cmp(&source, &current_child)) { // check if the message is from current child
         // wake up the process
+        LOG_INFO("COORDINATOR | Waking up the process\n");
         process_poll(&main_coordinator);
         return;
     }
@@ -403,20 +405,17 @@ PROCESS_THREAD(main_coordinator, ev, data)
     nullnet_set_input_callback(input_callback_coordinator);
 
     static int i;
+    PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_POLL);
 
     while (1){
-        i=0;
+        
+        while ((int) get_clock() < (int) window_start){
+            //LOG_INFO("COORDINATOR | clock: %d, window_start: %d\n", (int) get_clock(), (int) window_start);
+        }
+        LOG_INFO("COORDINATOR | clock: %d, window_start: %d\n", (int) get_clock(), (int) window_start);
+
         LOG_INFO("COORDINATOR | start\n");
 
-        // sleep for window_size - window_alloted seconds
-        LOG_INFO("COORDINATOR | sleep for %d ticks\n", window_size - window_allotted + SETUP_WINDOW);
-        
-        etimer_set(&window_timer, window_size - window_allotted + SETUP_WINDOW);
-
-        PROCESS_WAIT_EVENT_UNTIL(((window_start != 0) && (get_clock() >= window_start)) || etimer_expired(&window_timer));
-        
-        LOG_INFO("COORDINATOR | continue\n");
-        
         // if we have no children, send "ping" to parent
         if (children_size == 0) {
             LOG_INFO("COORDINATOR | Sending ping to parent\n");
@@ -426,45 +425,59 @@ PROCESS_THREAD(main_coordinator, ev, data)
         }
         
         etimer_set(&window_timer, window_allotted);
-        
-        while(i < children_size && !etimer_expired(&window_timer)) {
+        i=0;
+        while(!etimer_expired(&window_timer)) {
+            if (i < children_size){
+                // send "sensor" to parent
+                memcpy(nullnet_buf, "sensor", sizeof("sensor"));
+                nullnet_len = sizeof("sensor");
+                NETSTACK_NETWORK.output(&parent);
 
-            // send "sensor" to parent
-            memcpy(nullnet_buf, "sensor", sizeof("sensor"));
-            nullnet_len = sizeof("sensor");
-            NETSTACK_NETWORK.output(&parent);
+                // send the child address to the parent
+                memcpy(nullnet_buf, &children[i], sizeof(linkaddr_t));
+                nullnet_len = sizeof(linkaddr_t);
+                NETSTACK_NETWORK.output(&parent);
 
-            // send the child address to the parent
-            memcpy(nullnet_buf, &children[i], sizeof(linkaddr_t));
-            nullnet_len = sizeof(linkaddr_t);
-            NETSTACK_NETWORK.output(&parent);
+                // send the poll to the child
+                LOG_INFO("Sending poll message %d, children size %d\n", i, children_size);
+                memcpy(nullnet_buf, "poll", sizeof("poll"));
+                nullnet_len = sizeof("poll");
 
-            // send the poll to the child
-            LOG_INFO("Sending poll message %d, children size %d\n", i, children_size);
-            memcpy(nullnet_buf, "poll", sizeof("poll"));
-            nullnet_len = sizeof("poll");
-            current_child = children[i];
-            NETSTACK_NETWORK.output(&current_child);
-            i++;
+                memcpy(&current_child, &children[i], sizeof(linkaddr_t));
+                LOG_INFO("Sending poll to %d.%d\n", current_child.u8[0], current_child.u8[1]);
+                NETSTACK_NETWORK.output(&current_child);
 
-            // wait until the window timer expires or we receive a "done" from the child
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer) || ev == PROCESS_EVENT_POLL);
-            if (etimer_expired(&window_timer)) {
-                LOG_INFO("Sensor %d timeout\n", i);
-                
-                // remove the child from the children list
-                for (int j = 0; j < children_size; j++) {
-                    if (linkaddr_cmp(&children[j], &current_child)) {
-                        for (int k = j; k < children_size - 1; k++) {
-                            memcpy(&children[k], &children[k+1], sizeof(linkaddr_t));
+                // wait until the window timer expires or we receive a "done" from the child
+                PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer) || ev == PROCESS_EVENT_POLL);
+                if (etimer_expired(&window_timer)) {
+                    LOG_INFO("Sensor %d timeout\n", i);
+                    
+                    // remove the child from the children list
+                    for (int j = 0; j < children_size; j++) {
+                        if (linkaddr_cmp(&children[j], &current_child)) {
+                            for (int k = j; k < children_size - 1; k++) {
+                                memcpy(&children[k], &children[k+1], sizeof(linkaddr_t));
+                            }
+                            children_size--;
+                            break;
                         }
-                        children_size--;
-                        break;
-                    }
-                }   
+                    }   
+                }
+                i++;
+            } else {
+                PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&window_timer));
             }
         }
-        LOG_INFO("COORDINATOR | end\n");
+
+        // sleep for window_size - window_alloted seconds
+        LOG_INFO("COORDINATOR | sleep for %d ticks\n", window_size - window_allotted + SETUP_WINDOW);
+        
+        etimer_set(&window_timer, window_size - window_allotted + SETUP_WINDOW);
+
+        PROCESS_WAIT_EVENT_UNTIL( etimer_expired(&window_timer));
+        
+        LOG_INFO("COORDINATOR | continue\n");
+        
     }
     LOG_INFO("Exiting main_coordinator\n");
     PROCESS_END();
