@@ -130,13 +130,13 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
         }
         else if (waiting_for_window_start) {
             // set the window start
-            memcpy(&window_start, message, len);
+            memcpy(&window_start, message, sizeof(message));
             waiting_for_window_start = false;
             waiting_for_window_allotted = true;
         }
         else if (waiting_for_window_allotted) {
             // set the window allotted
-            memcpy(&window_allotted, message, len);
+            memcpy(&window_allotted, message, izeof(message));
             waiting_for_window_allotted = false;
             // wake up the process
             process_poll(&main_coordinator);
