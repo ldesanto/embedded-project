@@ -403,6 +403,7 @@ PROCESS_THREAD(main_coordinator, ev, data)
 
     while (1){
         i=0;
+        LOG_INFO("COORDINATOR | start\n");
         if (window_start != 0 && get_clock() <= window_start){
             etimer_set(&window_timer, window_allotted);
             // if we have no children, send "ping" to parent
