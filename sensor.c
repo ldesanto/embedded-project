@@ -117,6 +117,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
     if (linkaddr_cmp(&source, &parent)) {
         // if the message is "clock" send back the clock
         if (strcmp(message, "clock_request") == 0) {
+            LOG_INFO("COORDINATOR | Sending clock\n");
             // send back the clock
             clock_time_t current_clock = get_clock();
             memcpy(nullnet_buf, "test", sizeof("test"));
