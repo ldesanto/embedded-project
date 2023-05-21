@@ -275,7 +275,7 @@ void synchronization(){
         nullnet_len = sizeof("clock_request");
         NETSTACK_NETWORK.output(&pending_list[i]);
         //remove coordinator from the pending list and add it to the coordinator list
-        memcpy(&coordinator_list[number_of_coordinators], &pending_list[i], sizeof(linkaddr_t));
+        memcpy(&coordinator_list[number_of_coordinators], &pending_list[i], sizeof(&pending_list[i]));
         number_of_coordinators++;
     }
     waiting_for_sync = true;
@@ -300,22 +300,27 @@ void timeslotting() {
 
 void sendTimeslots(){
     static int i;
+    static linkaddr_t coordinator;
     for (i = 0; i < number_of_coordinators; i++){
+        coordinator = coordinator_list[i];
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
-        LOG_INFO("BORDER | Sending timeslots to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
+        LOG_INFO("BORDER | Sending timeslots to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
         //sending window message
         memcpy(nullnet_buf, "window", sizeof("window"));
         nullnet_len = sizeof("window");
-        NETSTACK_NETWORK.output(&coordinator_list[i]);
+        NETSTACK_NETWORK.output(&coordinator);
+        LOG_INFO("BORDER | Sending window to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
         //sending timeslot_start
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
         nullnet_len = sizeof(timeslot_start[i]);
-        NETSTACK_NETWORK.output(&coordinator_list[i]);
-        LOG_INFO("BORDER | Sending start %d \n", (int)timeslot_start[i]);
+        NETSTACK_NETWORK.output(&coordinator);
+        LOG_INFO("BORDER | Sending start to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
+
         //sending timeslot
         memcpy(nullnet_buf, &timeslots[i], sizeof(timeslots[i]));
         nullnet_len = sizeof(timeslots[i]);
-        NETSTACK_NETWORK.output(&coordinator_list[i]);
+        NETSTACK_NETWORK.output(&coordinator);
+        LOG_INFO("BORDER | Sending timeslot to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
     }
     slots_to_send = false;
 }

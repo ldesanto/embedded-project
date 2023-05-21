@@ -122,6 +122,10 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             NETSTACK_NETWORK.output(&parent);
             waiting_for_clock = true;
         }
+        // if the message is "window"
+        else if (strcmp(message, "window") == 0) {
+            waiting_for_window_start = true;
+        }
         else if (waiting_for_clock) {
             // set the clock offset equals to the difference between the clock received and the current clock
             uint32_t temp = 0;
@@ -131,10 +135,7 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
             LOG_INFO("New clock offset: %d, (%d, %d)\n", (int) clock_offset, (int) clock_time(), (int) temp);
             waiting_for_clock = false;
         }
-        // if the message is "window"
-        else if (strcmp(message, "window") == 0) {
-            waiting_for_window_start = true;
-        }
+        
         else if (waiting_for_window_start) {
             // set the window start
             memcpy(&window_start, message, sizeof(window_start));
