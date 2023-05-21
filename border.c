@@ -7,16 +7,9 @@
 #include "cc2420.h"
 #include "cc2420_const.h"
 #include "sys/log.h"
-#include "contiki.h"
-#include <stdlib.h>
-#include "net/netstack.h"
-#include "net/nullnet/nullnet.h"
-#include <string.h>
-#include <stdio.h>
-#include "cc2420.h"
-#include "cc2420_const.h"
-#include "sys/log.h"
-
+#include "dev/slip.h"
+#include "dev/serial-line.h"
+#include "cpu/msp430/dev/uart0.h"
 #define LOG_MODULE "App"
 #define LOG_LEVEL LOG_LEVEL_INFO
 
@@ -74,6 +67,13 @@ void assign_last_counts() {
             count_of_sensors[number_of_sensors] = last_count;
             number_of_sensors++;
         }
+    }
+}
+
+void send_sensor_data(){
+    for (int i = 0; i <= number_of_sensors; i++) {
+        uart0_writeb((unsigned char) i);
+        uart0_writeb((unsigned char) count_of_sensors[i]);
     }
 }
 
@@ -136,48 +136,6 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
     }
 }
 
-void input_callback_collect(const void *data, uint16_t len,
-  const linkaddr_t *src, const linkaddr_t *dest)
-{
-    static char message[20];
-    static linkaddr_t source;
-    memcpy(&source, src, sizeof(linkaddr_t));
-    memcpy(message, data, len);
-
-    if (strcmp(message, "coordinator") == 0){
-        //a new coordinator arrived, add it to the list of pending coordinators
-        if ((number_of_coordinators + number_of_pending) < MAX_COORDINATOR){
-            LOG_INFO("Received coordinator message from %d.%d\n", source.u8[0], source.u8[1]);
-            memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
-            number_of_pending++;
-        }
-        else {
-            LOG_INFO("Maximum number of coordinators reached\n");
-        }
-    }
-    else if (strcmp(message, "ping") == 0) {
-        LOG_INFO("Received ping message from %d.%d\n", source.u8[0], source.u8[1]);
-        number_of_messages ++;
-    }
-    else if (strcmp(message, "sensor") == 0){
-        // a message from a new sensor is about to be forwarded
-        LOG_INFO("Received sensor message from %d.%d\n", source.u8[0], source.u8[1]);
-        address_received = false;
-        number_of_messages ++;
-    }
-    else if (address_received){
-        //if the address is already received, then we're listenning for the count
-        LOG_INFO("Received count %s from %d.%d\n", message, last_sensor.u8[0], last_sensor.u8[1]);
-        last_count = atoi(message);
-    }
-    else {
-        //if the address is not received, then we're listenning for the address
-        LOG_INFO("Received address %s from %d.%d\n", message, source.u8[0], source.u8[1]);
-        memcpy(&last_sensor, src, sizeof(linkaddr_t));
-        address_received = true;
-    }
-}
-
 void synchronization(){
     LOG_INFO("BORDER | starting synchronization\n");
     state = 1;
@@ -225,25 +183,22 @@ void sendTimeslots(){
     for (i = 0; i < number_of_coordinators; i++){
         coordinator = coordinator_list[i];
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
+        LOG_INFO("BORDER | Sending timeslot to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
 
-        LOG_INFO("BORDER | Sending timeslots to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
         //sending window message
         memcpy(nullnet_buf, "window", sizeof("window"));
         nullnet_len = sizeof("window");
         NETSTACK_NETWORK.output(&coordinator);
 
-        LOG_INFO("BORDER | Sending window to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
         //sending timeslot_start
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
         nullnet_len = sizeof(timeslot_start[i]);
         NETSTACK_NETWORK.output(&coordinator);
-        LOG_INFO("BORDER | Sending start to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
 
         //sending timeslot
         memcpy(nullnet_buf, &timeslots[i], sizeof(timeslots[i]));
         nullnet_len = sizeof(timeslots[i]);
         NETSTACK_NETWORK.output(&coordinator);
-        LOG_INFO("BORDER | Sending timeslot to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
     }
 }
 
@@ -251,6 +206,7 @@ PROCESS_THREAD(init, ev, data){
     //Main process
 
     PROCESS_BEGIN();
+    uart0_set_input(serial_line_input_byte);
     LOG_INFO("BORDER | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
     static char message[20];
     static struct etimer timer;
@@ -300,6 +256,8 @@ PROCESS_THREAD(init, ev, data){
         
         LOG_INFO("BORDER | Sending window slots\n");
         sendTimeslots();
+        LOG_INFO("BORDER | Sending sensor data\n");
+        send_sensor_data();
 
         //wait until the first timeslot starts
         LOG_INFO("BORDER | Waiting for timeslot, %d ticks\n", (int) (timeslot_start[0] - (clock_time() + offset)));
