@@ -21,17 +21,21 @@
 #define LOG_LEVEL LOG_LEVEL_INFO
 
 /* Configuration */
+
 #define WINDOW_SIZE 2000 // window size in milliseconds
 #define MAX_COORDINATOR 4 // maximum number of coordinators
 #define MAX_SENSORS  16// maximum number of sensors
 #define WAIT_SYNC 1000 // time to wait for synchronization
 #define DELAY 1000 // delay between messages
-/*---------------------------------------------------------------------------*/
-PROCESS(init, "Init");
 
+/*---------------------------------------------------------------------------*/
+
+PROCESS(init, "Init");
 AUTOSTART_PROCESSES(&init);
 
-static bool address_received = false; // flag to indicate if the address was received
+/*---------------------------------------------------------------------------*/
+
+static bool address_received = false; // flag to indicate if the address of a sensor was received
 static linkaddr_t last_sensor; // address of the last sensor from which a message was received
 static linkaddr_t sensors[MAX_SENSORS]; // list of sensors addresses
 static int number_of_sensors = 0; // number of sensors
@@ -45,16 +49,15 @@ static uint32_t average_clock = 0; // average clock time of the coordinators
 static bool waiting_for_sync = false; // flag to indicate if the node is waiting for synchronization
 static int clock_received = 0; // number of clock times received
 static uint32_t coordinator_clock[MAX_COORDINATOR]; // clock times of the coordinators
-static uint32_t offset = 0;
+static uint32_t offset = 0; //offset of the border with the calculated average clock
 static uint32_t timeslots[MAX_COORDINATOR]; // timeslots of the coordinators
 static uint32_t timeslot_start[MAX_COORDINATOR] ; // start time of the timeslot
 static int receiving_from = -1; // index of the coordinator from which the node is receiving
 static int number_of_messages = 0; // number of messages received per window
 static bool stop = false; // flag to indicate if the node should exit
-/*---------------------------------------------------------------------------*/
-
 static int state = -1; // 0 : setup, 1 : synchronization, 2 : timeslotting, 3 : collection
 
+/*---------------------------------------------------------------------------*/
 void assign_last_counts() {
     //if a sensor is not in the list, add it
     for (int i = 0; i <= number_of_sensors; i++) {
@@ -73,6 +76,7 @@ void assign_last_counts() {
         }
     }
 }
+
 void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest) {
     static char message[20];
     static linkaddr_t source;
@@ -108,8 +112,7 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
     }
     else{
         if(waiting_for_sync && (strcmp(message,"new") != 0)){
-            //if the node is waiting for synchronization and the message is not a new message
-            //it means that the message is a clock time
+            //if the node is waiting for synchronization and the message is not a new message, it means that the message is a clock time
             LOG_INFO("BORDER | Received clock time from %d.%d\n", source.u8[0], source.u8[1]);
             memcpy(&coordinator_clock[clock_received], message, sizeof(uint32_t));
             clock_received++;
@@ -131,7 +134,6 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             address_received = true;
         }
     }
-    //process_poll(&init);
 }
 
 void input_callback_collect(const void *data, uint16_t len,
@@ -175,86 +177,7 @@ void input_callback_collect(const void *data, uint16_t len,
         address_received = true;
     }
 }
-/*PROCESS_THREAD(collection_process, ev, data){
-    static struct etimer timer;
-    static char message[20];
-    PROCESS_BEGIN()
-    LOG_INFO("Collection process started\n");
-    nullnet_buf = (uint8_t *)&message;
-    nullnet_len = sizeof(message);
-    nullnet_set_input_callback(input_callback_collect);
 
-    while (1){
-        etimer_set(&timer, CLOCK_SECOND * WINDOW_SIZE);
-        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-        LOG_INFO("Number of messages received: %d\n", number_of_messages);
-        number_of_messages = 0;
-        break;
-    }
-    PROCESS_END();
-}
-
-PROCESS_THREAD(setup_process, ev, data){
-    PROCESS_BEGIN();
-    LOG_INFO(" set up process started\n");
-
-    static struct etimer timer;
-    static char message[20];
-    static int inc = 0;
-
-    nullnet_buf = (uint8_t *)&message;
-    nullnet_len = sizeof(message);
-
-    nullnet_set_input_callback(input_callback);
-    etimer_set(&timer, CLOCK_SECOND * 5);
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-
-    if(number_of_pending == 0){
-        process_start(&init, NULL);
-    }
-
-    while(!stop){
-        //start synchronization
-        //process_start(&synchronizaton, NULL);
-        //wait for synchronization to finish
-        PROCESS_WAIT_EVENT_UNTIL(waiting_for_sync == false);
-        //start timeslotting
-        //process_start(&timeslotting, NULL);
-        //wait for timeslotting to finish
-        //PROCESS_WAIT_EVENT_UNTIL(waiting_for_timeslot == false);
-        //start the listenning process
-
-        while( inc < number_of_coordinators){
-            //wait for the start of the timeslot
-            etimer_set(&timer, timeslot_start[inc] - (clock_time() + offset));
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-            if (inc == 0){
-                receiving_from = 0;
-                process_start(&collection_process, NULL);
-            }
-            etimer_set(&timer, timeslot_start[inc] + timeslots[inc] - (clock_time() + offset));
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-            receiving_from ++;
-            inc++;
-        }
-        //stop the collecting process
-        process_exit(&collection_process);
-        //empty all the list but the list_of_coordinators, number of coordinators, and number of pending
-        memset(&pending_list, 0, sizeof(pending_list));
-        memset(&timeslot_start, 0, sizeof(timeslot_start));
-        memset(&timeslots, 0, sizeof(timeslots));
-        memset(&average_clock, 0, sizeof(average_clock));
-        memset(&offset, 0, sizeof(offset));
-        receiving_from = -1;
-        type = -1;
-        waiting_for_sync = false;
-        //waiting_for_timeslot = false;
-        LOG_INFO("new loop");
-
-    }
-    LOG_INFO("Stopping the process");
-    PROCESS_END();
-}*/
 void synchronization(){
     LOG_INFO("BORDER | starting synchronization\n");
     state = 1;
@@ -325,6 +248,8 @@ void sendTimeslots(){
 }
 
 PROCESS_THREAD(init, ev, data){
+    //Main process
+
     PROCESS_BEGIN();
     LOG_INFO("BORDER | init process started with address %d%d\n", linkaddr_node_addr.u8[0], linkaddr_node_addr.u8[1]);
     static char message[20];
@@ -341,7 +266,6 @@ PROCESS_THREAD(init, ev, data){
         nullnet_len = sizeof(message);
         NETSTACK_NETWORK.output(NULL);
     }
-    //wait 5 seconds
     PROCESS_WAIT_EVENT_UNTIL(number_of_coordinators > 0 || number_of_pending > 0);
     while(!stop){
         synchronization();
@@ -376,7 +300,7 @@ PROCESS_THREAD(init, ev, data){
         
         LOG_INFO("BORDER | Sending window slots\n");
         sendTimeslots();
-       
+
         //wait until the first timeslot starts
         LOG_INFO("BORDER | Waiting for timeslot, %d ticks\n", (int) (timeslot_start[0] - (clock_time() + offset)));
         // log the timeslot start, the current clock time and the offset
