@@ -41,13 +41,13 @@ static linkaddr_t coordinator_list[MAX_COORDINATOR]; // list of coordinators add
 static linkaddr_t pending_list[MAX_COORDINATOR]; // list of pending coordinators addresses
 static int number_of_coordinators = 0; // number of coordinators
 static int number_of_pending = 0; // number of pending coordinators
-static clock_time_t average_clock = 0; // average clock time of the coordinators
+static uint32_t average_clock = 0; // average clock time of the coordinators
 static bool waiting_for_sync = false; // flag to indicate if the node is waiting for synchronization
 static int clock_received = 0; // number of clock times received
-static clock_time_t coordinator_clock[MAX_COORDINATOR]; // clock times of the coordinators
-static clock_time_t offset = 0;
-static clock_time_t timeslots[MAX_COORDINATOR]; // timeslots of the coordinators
-static clock_time_t timeslot_start[MAX_COORDINATOR] ; // start time of the timeslot
+static uint32_t coordinator_clock[MAX_COORDINATOR]; // clock times of the coordinators
+static uint32_t offset = 0;
+static uint32_t timeslots[MAX_COORDINATOR]; // timeslots of the coordinators
+static uint32_t timeslot_start[MAX_COORDINATOR] ; // start time of the timeslot
 static int receiving_from = -1; // index of the coordinator from which the node is receiving
 static int number_of_messages = 0; // number of messages received per window
 static bool slots_to_send = false; // flag to indicate if the node is waiting for a timeslot
@@ -113,7 +113,7 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             //if the node is waiting for synchronization and the message is not a new message
             //it means that the message is a clock time
             LOG_INFO("BORDER | Received clock time from %d.%d\n", source.u8[0], source.u8[1]);
-            memcpy(&coordinator_clock[clock_received], message, sizeof(clock_time_t));
+            memcpy(&coordinator_clock[clock_received], message, sizeof(uint32_t));
             clock_received++;
             if(clock_received == number_of_coordinators){
                 waiting_for_sync = false;
@@ -299,7 +299,8 @@ void timeslotting() {
 }
 
 void sendTimeslots(){
-    for (int i = 0; i < number_of_coordinators; i++){
+    static int i;
+    for (i = 0; i < number_of_coordinators; i++){
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
         LOG_INFO("BORDER | Sending timeslots to %d.%d\n", coordinator_list[i].u8[0], coordinator_list[i].u8[1]);
         //sending window message
@@ -345,14 +346,14 @@ PROCESS_THREAD(init, ev, data){
         PROCESS_WAIT_EVENT_UNTIL(!waiting_for_sync || ev == PROCESS_EVENT_POLL);
         //calculate average clock time
         for (int i = 0; i < number_of_coordinators; i++){
-            average_clock += coordinator_clock[i];
+            average_clock += (uint32_t) coordinator_clock[i];
         }
-        average_clock += clock_time();
+        average_clock += (uint32_t) clock_time();
         // log the number of coordinators
-        average_clock = (clock_time_t) ((int)average_clock)/(number_of_coordinators + 1);
+        average_clock = average_clock/(number_of_coordinators + 1);
         //calculate the offset between own clock and average clock
-        offset = average_clock - clock_time();
-        LOG_INFO("BORDER | Sending new clocktime (%d, %d)\n",(int) clock_time(), (int) average_clock);
+        offset = (uint32_t) (average_clock - clock_time());
+        LOG_INFO("BORDER | Sending new clocktime (%d, %d)\n", (int) clock_time(), (int) average_clock);
         memcpy(nullnet_buf, &average_clock, sizeof(average_clock));
         nullnet_len = sizeof(average_clock);
         NETSTACK_NETWORK.output(NULL);
@@ -373,9 +374,10 @@ PROCESS_THREAD(init, ev, data){
             sendTimeslots();
         }
         //wait until the first timeslot starts
-        LOG_INFO("BORDER | Waiting for first timeslot, %d ticks\n", (int)timeslot_start[0] - (int) clock_time() + (int) offset);
-        LOG_INFO("BORDER | %d, %d, %d\n", (int)timeslot_start[0], (int) clock_time(), (int) offset);
-        etimer_set(&timer, timeslot_start[0] - clock_time() + offset);
+        LOG_INFO("BORDER | Waiting for timeslot, %d ticks\n", (int) (timeslot_start[0] - (clock_time() + offset)));
+        // log the timeslot start, the current clock time and the offset
+        LOG_INFO("BORDER | Timeslot start: %d, clock: %d, offset: %d\n", (int) timeslot_start[0], (int) clock_time(), (int) offset);
+        etimer_set(&timer, (int) (timeslot_start[0] - (clock_time() + offset)));
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
         state = 3;
         LOG_INFO("BORDER | Starting window\n");

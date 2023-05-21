@@ -15,7 +15,7 @@
 /* Configuration */
 #define MAX_CANDIDATE 10 // max number of candidates
 #define MAX_RETRIES 2 // max number of retries to find a parent
-#define GATHER_TIME 2 // time to gather candidates (in seconds)
+#define GATHER_TIME 5 // time to gather candidates (in seconds)
 #define MAX_WAIT 60 // max wait time for a response from parent (in seconds)
 #define MAX_CHILDREN 10 // max number of children
 #define DATA_LENGTH 1 // length of data to send
@@ -44,7 +44,7 @@ static int coord_candidate_rssi[MAX_CANDIDATE];
 static int sensor_candidate_rssi[MAX_CANDIDATE];
 static int type = -1; // 0: sensor, 1: coordinator // -1 undecided
 
-static clock_time_t window_start = 0;
+static uint32_t window_start = 0;
 static int window_size = WINDOW_SIZE;
 static int window_allotted = WINDOW_SIZE;
 
@@ -56,12 +56,12 @@ static bool waiting_for_window_allotted = false;
 
 static int counter = 0;
 
-static clock_time_t clock_offset = 0;
+static int clock_offset = 0;
 
 /*---------------------------------------------------------------------------*/
 
-clock_time_t get_clock() {
-    return clock_time() + clock_offset;
+uint32_t get_clock() {
+    return (uint32_t) (clock_time() + clock_offset);
 }
 
 void send_data(){
@@ -124,11 +124,11 @@ void input_callback_coordinator(const void *data, uint16_t len, const linkaddr_t
         }
         else if (waiting_for_clock) {
             // set the clock offset equals to the difference between the clock received and the current clock
-            int temp = 0;
+            uint32_t temp = 0;
             memcpy(&temp, message, sizeof(temp));
-            int new_clock_offset = clock_time() - temp;
+            int new_clock_offset = (uint32_t) clock_time() - temp;
             memcpy(&clock_offset, &new_clock_offset, sizeof(clock_offset));
-            LOG_INFO("New clock offset: %d, (%d, %d)\n", (int) clock_offset, (int) clock_time(), temp);
+            LOG_INFO("New clock offset: %d, (%d, %d)\n", (int) clock_offset, (int) clock_time(), (int) temp);
             waiting_for_clock = false;
         }
         // if the message is "window"
@@ -311,8 +311,8 @@ PROCESS_THREAD(setup_process, ev, data)
     nullnet_set_input_callback(input_callback_setup);
 
 
-    // wait for a random time between 0 and 10 seconds
-    etimer_set(&periodic_timer, rand() % (10 * CLOCK_SECOND));
+    // wait for a random time between 0 and 20 seconds
+    etimer_set(&periodic_timer, rand() % (20 * CLOCK_SECOND));
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
 
 
