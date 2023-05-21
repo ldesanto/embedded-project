@@ -3,11 +3,6 @@ import argparse
 import sys
 import time
 
-COUNT = 0
-
-def update(data):
-    #TODO : update the count based on the data received
-    pass
 def recv(sock):
     data = sock.recv(1)
     buf = b""
@@ -17,17 +12,16 @@ def recv(sock):
     return buf
 def send(sock, data):
     sock.send(data.encode("utf-8"))
-
+def print_data():
+    while True:
+        data = recv(sock)
+        print(data.decode("utf-8"))
 def main(ip, port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((ip, port))
 
     for _ in range(20):
         sock.send(b"test\n")
-        data = recv(sock)
-        print("Message received : "+ data.decode("utf-8"))
-        update(data.decode("utf-8"))
-        print("new count :" + str(COUNT))
         time.sleep(1)
 
 
