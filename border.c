@@ -317,7 +317,6 @@ PROCESS_THREAD(init, ev, data){
             etimer_set(&timer, timeslots[i2]);
             LOG_INFO("BORDER | Waiting for %d ticks (%d, %d)\n", (int) timeslots[i2], i2, number_of_coordinators);
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-            //TODO remove the coordinator that didn't send a message
             number_of_messages = 0;
             i2++;
         }
