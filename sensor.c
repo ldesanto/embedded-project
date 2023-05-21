@@ -15,7 +15,7 @@
 /* Configuration */
 #define MAX_CANDIDATE 10 // max number of candidates
 #define MAX_RETRIES 2 // max number of retries to find a parent
-#define GATHER_TIME 5 // time to gather candidates (in seconds)
+#define GATHER_TIME 2 // time to gather candidates (in seconds)
 #define MAX_WAIT 60 // max wait time for a response from parent (in seconds)
 #define MAX_CHILDREN 10 // max number of children
 #define DATA_LENGTH 1 // length of data to send
@@ -313,7 +313,7 @@ PROCESS_THREAD(setup_process, ev, data)
 
 
     // wait for a random time between 0 and 20 seconds
-    etimer_set(&periodic_timer, rand() % (20 * CLOCK_SECOND));
+    etimer_set(&periodic_timer, rand() % (10 * CLOCK_SECOND));
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
 
 

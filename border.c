@@ -50,7 +50,6 @@ static uint32_t timeslots[MAX_COORDINATOR]; // timeslots of the coordinators
 static uint32_t timeslot_start[MAX_COORDINATOR] ; // start time of the timeslot
 static int receiving_from = -1; // index of the coordinator from which the node is receiving
 static int number_of_messages = 0; // number of messages received per window
-static bool slots_to_send = false; // flag to indicate if the node is waiting for a timeslot
 static bool stop = false; // flag to indicate if the node should exit
 /*---------------------------------------------------------------------------*/
 
@@ -87,7 +86,6 @@ void input_callback(const void *data, uint16_t len, const linkaddr_t *src, const
             memcpy(&pending_list[number_of_pending], src, sizeof(linkaddr_t));
             number_of_pending++;
             LOG_INFO("BORDER | Number of pending coordinators: %d\n", number_of_pending);
-            slots_to_send = true;
             process_poll(&init);
         }
         else {
@@ -304,11 +302,13 @@ void sendTimeslots(){
     for (i = 0; i < number_of_coordinators; i++){
         coordinator = coordinator_list[i];
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
+
         LOG_INFO("BORDER | Sending timeslots to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
         //sending window message
         memcpy(nullnet_buf, "window", sizeof("window"));
         nullnet_len = sizeof("window");
         NETSTACK_NETWORK.output(&coordinator);
+
         LOG_INFO("BORDER | Sending window to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
         //sending timeslot_start
         memcpy(nullnet_buf, &timeslot_start[i], sizeof(timeslot_start[i]));
@@ -322,7 +322,6 @@ void sendTimeslots(){
         NETSTACK_NETWORK.output(&coordinator);
         LOG_INFO("BORDER | Sending timeslot to %d.%d\n", coordinator.u8[0], coordinator.u8[1]);
     }
-    slots_to_send = false;
 }
 
 PROCESS_THREAD(init, ev, data){
@@ -374,10 +373,10 @@ PROCESS_THREAD(init, ev, data){
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer) || ev == PROCESS_EVENT_POLL);
         //start timeslotting
         timeslotting();
-        if(slots_to_send){
-            LOG_INFO("BORDER | Sending window slots\n");
-            sendTimeslots();
-        }
+        
+        LOG_INFO("BORDER | Sending window slots\n");
+        sendTimeslots();
+       
         //wait until the first timeslot starts
         LOG_INFO("BORDER | Waiting for timeslot, %d ticks\n", (int) (timeslot_start[0] - (clock_time() + offset)));
         // log the timeslot start, the current clock time and the offset
